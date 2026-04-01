@@ -143,7 +143,7 @@ class EvaluationRunner:
             output_file: Path to output JSON file
         """
         try:
-            with open(output_file, "w") as f:
+            with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "results": self.results,

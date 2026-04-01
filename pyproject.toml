@@ -124,7 +124,6 @@ ignore_missing_imports = true
 
 [tool.pylint.messages_control]
 disable = [
-    "C0330", "C0326",  # Bad whitespace
     "R0913",           # Too many arguments
     "R0914",           # Too many local variables
     "W0212",           # Protected access

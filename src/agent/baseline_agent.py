@@ -1,8 +1,7 @@
 """Baseline agent using raw file access (without Graph API)."""
 
-import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from loguru import logger
 
@@ -111,7 +110,7 @@ class BaselineAgent:
             full_path = self.repo_path / file_path
             if full_path.exists():
                 try:
-                    with open(full_path, "r") as f:
+                    with open(full_path, "r", encoding="utf-8") as f:
                         content = f.read()
                         files[file_path] = content
                         total_bytes += len(content)

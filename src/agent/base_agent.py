@@ -1,7 +1,6 @@
 """Base agent for code modification tasks using Graph API."""
 
-import json
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from loguru import logger
 

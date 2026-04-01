@@ -238,7 +238,7 @@ class EmbeddingService:
         cache_file = self.cache_dir / "embeddings_cache.json"
         if cache_file.exists():
             try:
-                with open(cache_file, "r") as f:
+                with open(cache_file, "r", encoding="utf-8") as f:
                     self.embedding_cache = json.load(f)
                 logger.info(f"Loaded {len(self.embedding_cache)} cached embeddings")
             except Exception as e:
@@ -248,7 +248,7 @@ class EmbeddingService:
         """Save embedding cache to disk."""
         cache_file = self.cache_dir / "embeddings_cache.json"
         try:
-            with open(cache_file, "w") as f:
+            with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(self.embedding_cache, f)
             logger.info(f"Saved {len(self.embedding_cache)} embeddings to cache")
         except Exception as e:
