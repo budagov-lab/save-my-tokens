@@ -62,3 +62,26 @@ yarn-error.log
 
 # Test fixtures
 fixtures/test_repos/
+
+# Internal planning docs
+DEVELOPMENT_TASKS.md
+PROGRESS.md
+WORKING_PLAN.md
+Phase_1_MVP_Revised.md
+TESTING_PLAN.md
+TOKEN_SAVING.md
+IMPLEMENTATION_SUMMARY.md
+PHASE_2_RECOMMENDATIONS.md
+
+# AI assistant config
+CLAUDE.md
+.claude/settings.local.json
+
+# Test artifacts
+DECISION_BRIEF.txt
+TEST_EXECUTION_SUMMARY.txt
+PHASE_1_TEST_REPORT.md
+test_results.json
+run_tests.py
+extract_test_results.py
+run_comprehensive_tests.py

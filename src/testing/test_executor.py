@@ -351,7 +351,7 @@ class TestExecutor:
         return {
             "decision": decision,
             "criteria": {name: passed for name, (passed, _) in criteria.items()},
-            "criteria_descriptions": {name: desc for _, (_, desc) in criteria.items()},
+            "criteria_descriptions": {name: desc for name, (_, desc) in criteria.items()},
             "passed": passed,
             "total": total,
         }
