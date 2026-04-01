@@ -30,7 +30,7 @@ Graph API structures code as a queryable dependency graph **exposed via MCP**:
 - **Incremental updates** — git-aware graph updates without full re-parse
 - **Contract awareness** — breaking-change detection before modifications
 
-**Performance:** 11x more problems solved per conversation within same token budget.
+**Design Goals:** Designed to support 11x more problems per conversation by reducing token overhead compared to naive full-file access.
 
 ## Quick Start
 
