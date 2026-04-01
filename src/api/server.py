@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from src.api.query_service import QueryService
 from src.config import settings
 from src.__version__ import __version__
+from src.embeddings import EmbeddingService
 from src.graph import Neo4jClient
 from src.parsers.symbol_index import SymbolIndex
 
@@ -48,12 +49,17 @@ class ConflictValidationRequest(BaseModel):
     tasks: List[Task]
 
 
-def create_app(symbol_index: Optional[SymbolIndex] = None, query_service: Optional[QueryService] = None) -> FastAPI:
+def create_app(
+    symbol_index: Optional[SymbolIndex] = None,
+    query_service: Optional[QueryService] = None,
+    embedding_service: Optional[EmbeddingService] = None,
+) -> FastAPI:
     """Create and configure FastAPI application.
 
     Args:
         symbol_index: Symbol index (created if not provided)
         query_service: Query service (created if not provided)
+        embedding_service: Embedding service (created if not provided)
     """
 
     app = FastAPI(
@@ -90,14 +96,22 @@ def create_app(symbol_index: Optional[SymbolIndex] = None, query_service: Option
     # Initialize services
     if symbol_index is None:
         symbol_index = SymbolIndex()
+
+    if embedding_service is None:
+        try:
+            embedding_service = EmbeddingService(symbol_index)
+        except Exception as e:
+            logger.warning(f"Could not initialize embedding service: {e}")
+            embedding_service = None
+
     if query_service is None:
         try:
             neo4j_client = Neo4jClient()
-            query_service = QueryService(symbol_index, neo4j_client)
+            query_service = QueryService(symbol_index, neo4j_client, embedding_service)
         except Exception as e:
             logger.warning(f"Could not initialize Neo4j client: {e}. Running in demo mode.")
             neo4j_client = None
-            query_service = QueryService(symbol_index, neo4j_client)  # type: ignore
+            query_service = QueryService(symbol_index, neo4j_client, embedding_service)  # type: ignore
 
     # Health check endpoint
     @app.get("/health")

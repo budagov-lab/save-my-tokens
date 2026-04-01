@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 from loguru import logger
 
+from src.embeddings import EmbeddingService
 from src.graph.neo4j_client import Neo4jClient
 from src.parsers.symbol_index import SymbolIndex
 
@@ -11,15 +12,22 @@ from src.parsers.symbol_index import SymbolIndex
 class QueryService:
     """Service for querying the dependency graph."""
 
-    def __init__(self, symbol_index: SymbolIndex, neo4j_client: Neo4jClient):
+    def __init__(
+        self,
+        symbol_index: SymbolIndex,
+        neo4j_client: Optional[Neo4jClient] = None,
+        embedding_service: Optional[EmbeddingService] = None,
+    ):
         """Initialize query service.
 
         Args:
             symbol_index: Symbol index for symbol lookup
             neo4j_client: Neo4j client for graph queries
+            embedding_service: Embedding service for semantic search
         """
         self.symbol_index = symbol_index
         self.neo4j_client = neo4j_client
+        self.embedding_service = embedding_service
 
     def get_context(
         self, symbol_name: str, depth: int = 1, include_callers: bool = False
@@ -130,12 +138,47 @@ class QueryService:
         Returns:
             List of matching symbols with similarity scores
         """
-        # In production, would:
-        # 1. Embed the query using OpenAI API
-        # 2. Search FAISS index for nearest neighbors
-        # 3. Return top_k results with scores
+        results = []
 
-        # For now, simple prefix search as fallback
+        # Use embedding service if available
+        if self.embedding_service:
+            try:
+                search_results = self.embedding_service.search(query, top_k=top_k)
+                for symbol, similarity_score in search_results:
+                    results.append(
+                        {
+                            "symbol_name": symbol.name,
+                            "symbol_type": symbol.type,
+                            "file": symbol.file,
+                            "line": symbol.line,
+                            "node_id": symbol.node_id,
+                            "similarity_score": similarity_score,
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"Embedding search failed: {e}. Falling back to substring search.")
+                results = self._fallback_search(query, top_k)
+        else:
+            # Fallback to simple substring search
+            results = self._fallback_search(query, top_k)
+
+        logger.info(f"Semantic search for '{query}': {len(results)} results")
+        return {
+            "query": query,
+            "results": results,
+            "top_k": top_k,
+        }
+
+    def _fallback_search(self, query: str, top_k: int) -> List[Dict]:
+        """Fallback substring search.
+
+        Args:
+            query: Search query
+            top_k: Number of results to return
+
+        Returns:
+            List of result dictionaries
+        """
         results = []
         all_symbols = self.symbol_index.get_all()
 
@@ -161,14 +204,7 @@ class QueryService:
 
         # Sort by score and return top_k
         results.sort(key=lambda x: x["similarity_score"], reverse=True)
-        results = results[:top_k]
-
-        logger.info(f"Semantic search for '{query}': {len(results)} results")
-        return {
-            "query": query,
-            "results": results,
-            "top_k": top_k,
-        }
+        return results[:top_k]
 
     def validate_conflicts(self, tasks: List[Dict]) -> Dict:
         """Validate conflicts between parallel tasks.
