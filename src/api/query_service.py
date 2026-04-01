@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from src.embeddings import EmbeddingService
+from src.graph.conflict_analyzer import ConflictAnalyzer
 from src.graph.neo4j_client import Neo4jClient
 from src.parsers.symbol_index import SymbolIndex
 
@@ -28,6 +29,9 @@ class QueryService:
         self.symbol_index = symbol_index
         self.neo4j_client = neo4j_client
         self.embedding_service = embedding_service
+        self.conflict_analyzer = (
+            ConflictAnalyzer(symbol_index, neo4j_client) if neo4j_client else None
+        )
 
     def get_context(
         self, symbol_name: str, depth: int = 1, include_callers: bool = False
@@ -209,6 +213,11 @@ class QueryService:
     def validate_conflicts(self, tasks: List[Dict]) -> Dict:
         """Validate conflicts between parallel tasks.
 
+        Performs comprehensive conflict analysis:
+        - Direct overlap detection (same symbol modified by multiple tasks)
+        - Dependency conflict detection (task modifies what another depends on)
+        - Circular dependency detection (task has cyclic dependency)
+
         Args:
             tasks: List of task dicts with 'id' and 'target_symbols' fields
 
@@ -216,9 +225,20 @@ class QueryService:
             Conflict report with detected conflicts and parallel feasibility
         """
         if not tasks:
-            return {"tasks": [], "conflicts": [], "parallel_feasible": True}
+            return {
+                "tasks": [],
+                "direct_conflicts": [],
+                "dependency_conflicts": [],
+                "circular_dependencies": [],
+                "parallel_feasible": True,
+                "recommendation": "No tasks to analyze",
+            }
 
-        # Simple conflict detection: if two tasks modify overlapping symbols
+        # Use advanced conflict analyzer if available
+        if self.conflict_analyzer:
+            return self.conflict_analyzer.analyze_conflicts(tasks)
+
+        # Fallback: simple conflict detection
         conflicts = []
 
         for i, task_a in enumerate(tasks):
@@ -230,18 +250,24 @@ class QueryService:
                 if overlap:
                     conflicts.append(
                         {
+                            "type": "direct_overlap",
                             "task_a": task_a.get("id", f"task_{i}"),
                             "task_b": task_b.get("id", f"task_{i+1}"),
-                            "shared_symbols": list(overlap),
+                            "conflicting_symbols": list(overlap),
                         }
                     )
 
         # Tasks are parallelizable if no conflicts
         parallel_feasible = len(conflicts) == 0
 
-        logger.info(f"Conflict validation: {len(conflicts)} conflicts, parallel_feasible={parallel_feasible}")
+        logger.info(
+            f"Conflict validation: {len(conflicts)} conflicts, parallel_feasible={parallel_feasible}"
+        )
         return {
             "tasks": [t.get("id", f"task_{i}") for i, t in enumerate(tasks)],
-            "conflicts": conflicts,
+            "direct_conflicts": conflicts,
+            "dependency_conflicts": [],
+            "circular_dependencies": [],
             "parallel_feasible": parallel_feasible,
+            "recommendation": "Direct overlap detected" if conflicts else "All tasks independent",
         }
