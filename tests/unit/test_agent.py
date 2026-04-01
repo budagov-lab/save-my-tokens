@@ -164,14 +164,16 @@ class TestAgentEvaluator:
             "statistics": {
                 "success_rate": 1.0,
                 "avg_tokens_used": 500,
-            }
+            },
+            "execution_time_seconds": 5.0,
         }
 
         baseline_results = {
             "statistics": {
                 "success_rate": 1.0,
                 "avg_tokens_used": 2000,
-            }
+            },
+            "execution_time_seconds": 10.0,
         }
 
         comparison = evaluator._compare_results(graph_api_results, baseline_results)

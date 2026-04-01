@@ -209,6 +209,10 @@ class EmbeddingService:
         results = []
         query_lower = query.lower()
 
+        # Return empty results for empty query
+        if not query_lower:
+            return results
+
         for symbol in self.symbol_index.get_all():
             score = 0.0
 

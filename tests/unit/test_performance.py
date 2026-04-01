@@ -54,10 +54,10 @@ class TestCacheOptimizer:
 
     def test_suggest_cache_size(self) -> None:
         """Test cache size suggestion."""
-        # 1000 items, fit in 100MB
+        # 1000 items, fit in 100MB = 104857 bytes per item (100MB / 1000)
         max_item_size = CacheOptimizer.suggest_cache_size(1000, target_mb=100)
         assert max_item_size > 0
-        assert max_item_size <= 102400  # ~100KB per item
+        assert max_item_size <= 104858  # 100MB / 1000 items
 
 
 class TestQueryOptimizer:

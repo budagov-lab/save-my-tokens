@@ -100,12 +100,15 @@ class TestEmbeddingService:
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
         results = service._fallback_search("", top_k=2)
 
-        # With empty query, should return empty
+        # With empty query, should return empty (no score > 0)
         assert len(results) == 0
 
-        results = service._fallback_search("a", top_k=2)
-        # Should not exceed top_k
-        assert len(results) <= 2
+        results = service._fallback_search("authenticate_user", top_k=1)
+        # Should not exceed top_k (top_k=1)
+        assert len(results) <= 1
+        # Should find the exact match
+        assert len(results) == 1
+        assert results[0][0].name == "authenticate_user"
 
     def test_fallback_search_docstring(self, symbol_index: SymbolIndex, temp_cache_dir: Path) -> None:
         """Test fallback search matches in docstring."""

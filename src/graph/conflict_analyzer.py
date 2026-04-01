@@ -53,19 +53,12 @@ class ConflictAnalyzer:
                     continue
                 symbol = candidates[0]
 
-            # Get imports
+            # Get imports - only add direct imports (not all symbols in same file)
             imports = self.symbol_index.get_imports()
             for imp in imports:
-                if imp.parent == symbol.name or imp.file == symbol.file:
+                if imp.file == symbol.file:
                     dependencies.add(imp.name)
                     to_visit.append(imp.name)
-
-            # Get functions in same file (could be called)
-            file_symbols = self.symbol_index.get_by_file(symbol.file)
-            for file_sym in file_symbols:
-                if file_sym.type in ("function", "class"):
-                    dependencies.add(file_sym.name)
-                    to_visit.append(file_sym.name)
 
         self._dependency_cache[symbol_name] = dependencies
         return dependencies

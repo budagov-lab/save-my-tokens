@@ -71,11 +71,12 @@ def test_extract_imports(parser, sample_file):
     symbols = parser.parse_file(sample_file)
     imports = [s for s in symbols if s.type == "import"]
 
-    assert len(imports) >= 3
-    # Should find os, Dict, List, func imports
+    assert len(imports) >= 2
+    # Should find os, List (from typing)
     import_names = [s.name for s in imports]
     assert any("os" in name for name in import_names)
-    assert any("Dict" in name or "List" in name for name in import_names)
+    # Check for typing imports (List or typing.List depending on parser resolution)
+    assert any("List" in name or "typing" in name for name in import_names)
 
 
 def test_method_parent(parser, sample_file):

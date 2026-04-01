@@ -190,7 +190,7 @@ class TestConflictValidationEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["parallel_feasible"] is True
-        assert len(data["conflicts"]) == 0
+        assert len(data["direct_conflicts"]) == 0
 
     def test_validate_with_conflicts(self, test_client: TestClient) -> None:
         """Test validation with conflicting tasks."""
@@ -204,7 +204,7 @@ class TestConflictValidationEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["parallel_feasible"] is False
-        assert len(data["conflicts"]) > 0
+        assert len(data["direct_conflicts"]) > 0
 
     def test_validate_empty_tasks(self, test_client: TestClient) -> None:
         """Test validation with empty task list."""
@@ -213,4 +213,4 @@ class TestConflictValidationEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["parallel_feasible"] is True
-        assert len(data["conflicts"]) == 0
+        assert len(data["direct_conflicts"]) == 0

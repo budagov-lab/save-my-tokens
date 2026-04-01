@@ -71,6 +71,7 @@ testpaths = ["tests"]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+norecursedirs = ["fixtures"]
 addopts = "-v --cov=src --cov-report=html --cov-report=term-missing"
 asyncio_mode = "auto"
 

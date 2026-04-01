@@ -27,9 +27,8 @@ def test_stats_endpoint(client):
     response = client.get("/api/stats")
     assert response.status_code == 200
     data = response.json()
-    assert "nodes" in data
-    assert "edges" in data
-    assert "graph_size_mb" in data
+    assert "node_count" in data
+    assert "edge_count" in data
 
 
 def test_openapi_schema(client):

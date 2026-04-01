@@ -1,13 +1,19 @@
 """Configuration for save-my-tokens application."""
 
-import os
 from pathlib import Path
 
+from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
+
+    model_config = ConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
     # Neo4j Configuration
     NEO4J_URI: str = "bolt://localhost:7687"
@@ -38,13 +44,6 @@ class Settings(BaseSettings):
     DATA_DIR: Path = PROJECT_ROOT / "data"
     LOGS_DIR: Path = PROJECT_ROOT / "logs"
     FIXTURES_DIR: Path = PROJECT_ROOT / "tests" / "fixtures"
-
-    class Config:
-        """Pydantic settings configuration."""
-
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
 
     def __init__(self, **kwargs):
         """Initialize settings and ensure directories exist."""
