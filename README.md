@@ -1,8 +1,10 @@
 # Save My Tokens (SYT)
 
-**A production-grade Graph API + MCP server that transforms source code into structured dependency graphs, enabling LLM agents to work efficiently on codebases.**
+**A Graph API + MCP server that transforms source code into structured dependency graphs, enabling LLM agents to work efficiently on codebases.**
 
-Agents retrieve **minimal, relevant context** for code modifications—reducing token overhead by **96.9%** compared to naive full-file access. Includes parallel-safe task execution, semantic code search, incremental updates, and contract-aware change detection.
+Agents retrieve **minimal, relevant context** for code modifications instead of loading entire files. Includes 10 MCP tools for dependency queries, breaking change detection, incremental updates, and parallel-safe task execution.
+
+**Current Status:** Phase 2 implementation complete. MCP server production-ready. REST API deprecated.
 
 **Architecture:** MCP (Model Context Protocol) for native agent integration with stateful session management.
 
@@ -125,31 +127,31 @@ result = graph_api.get_context("process_data", depth=2, include_callers=True)
 - **Token efficient:** No HTTP serialization overhead
 - **Session awareness:** Agent context preserved across tool calls
 
-## Metrics & Benchmarks
+## Implementation Status
 
-**Phase 1 Results (Graph API Foundation):**
+**Phase 1 (MVP) - Complete:**
+- Symbol extraction: Python, TypeScript parsers
+- Dependency graph: Neo4j-backed with 9 edge types
+- Query API: 4 endpoints (minimal, no longer REST-only)
+- Semantic search: FAISS + optional embeddings
+- Conflict detection: Graph-based analysis
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Parser Coverage | 98%+ | >98% ✓ |
-| Query Latency (p99) | <500ms | <10ms ✓ |
-| Dependency Accuracy | 95%+ | >98% ✓ |
-| Conflict Detection Precision | 90%+ | >95% ✓ |
-| API Response Payload | <50KB | ~5KB ✓ |
-| Test Coverage | ≥80% | 85%+ ✓ |
+**Phase 2 (Enhancements) - Complete:**
+- Feature 1: Incremental Updates (git diff parsing, transactional graph updates)
+- Feature 2: Contract Extraction (breaking change detection, 7 change types)
+- Feature 3: Multi-Language Support (Python, TypeScript, Go, Rust, Java)
+- Feature 4: Task Scheduling (DAG-based, topological sort, parallel execution)
 
-**Phase 2 Results (Enhancements):**
-- ✅ Incremental Updates (git diff parsing, <100ms per file)
-- ✅ Contract Extraction (Python functions, 7 breaking change types)
-- ✅ Multi-Language Support (Python, TypeScript, Go, Rust, Java parsers)
-- ✅ Task Scheduling (DAG-based parallelization, <50ms for 1000 tasks)
+**MCP Migration - Complete:**
+- 10 MCP tools (graph queries, contracts, incremental, scheduling)
+- Stateful session management (graph loaded once)
+- Graceful degradation (works without Neo4j/embeddings)
+- Stdio transport (subprocess model for Claude Desktop/Code)
 
-**Key Benchmark:** Graph API achieves **96.9% token reduction** versus naive baseline. On a 50K LOC repository, agents can execute **11x more tasks** within the same token budget.
-
-**Tested on real codebases:**
-- Flask (18.4K LOC, Python)
-- Requests (11.2K LOC, Python)
-- Vue.js (10.1K LOC, TypeScript)
+**Test Coverage:**
+- 202 passing tests (85%+ coverage)
+- MCP server startup verified
+- Phase 2 features validated
 
 ## Architecture
 
