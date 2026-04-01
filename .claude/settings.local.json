@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(schedule)",
+      "WebSearch",
+      "Bash(git init:*)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m 'Initial commit: Project setup with planning documents and task breakdown:*)"
+    ]
+  }
+}
