@@ -6,6 +6,7 @@ from typing import List, Optional
 from tree_sitter import Language, Parser
 
 from src.parsers.symbol import Symbol
+from src.parsers.import_resolver import ImportResolver
 
 # Load Tree-sitter Python grammar
 try:
@@ -19,10 +20,15 @@ except ImportError:
 class PythonParser:
     """Extract symbols from Python source code using Tree-sitter."""
 
-    def __init__(self):
-        """Initialize parser."""
+    def __init__(self, base_path: Optional[str] = None):
+        """Initialize parser.
+
+        Args:
+            base_path: Root directory for resolving relative imports
+        """
         self.parser = Parser()
         self.parser.language = PYTHON_LANGUAGE
+        self.import_resolver = ImportResolver(base_path)
 
     def parse_file(self, file_path: str) -> List[Symbol]:
         """Parse Python file and extract symbols."""
@@ -166,19 +172,21 @@ class PythonParser:
     ) -> List[Symbol]:
         """Extract symbols from 'import X' statement."""
         imports = []
-        # import_statement has dotted_name or aliased_import children
-        for child in node.children:
-            if child.type in ("dotted_name", "dotted_as_name", "aliased_import"):
-                name = source_code[child.start_byte : child.end_byte].decode("utf-8")
-                imports.append(
-                    Symbol(
-                        name=name,
-                        type="import",
-                        file=file_path,
-                        line=node.start_point[0] + 1,
-                        column=node.start_point[1],
-                    )
+        statement_text = source_code[node.start_byte : node.end_byte].decode("utf-8")
+        imported_names = ImportResolver.extract_import_names(statement_text)
+
+        for name in imported_names:
+            # Resolve relative imports
+            resolved_name = self.import_resolver.resolve_python_import(name, file_path)
+            imports.append(
+                Symbol(
+                    name=resolved_name,
+                    type="import",
+                    file=file_path,
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1],
                 )
+            )
         return imports
 
     def _extract_from_imports(
@@ -186,41 +194,45 @@ class PythonParser:
     ) -> List[Symbol]:
         """Extract symbols from 'from X import Y' statement."""
         imports = []
-        module_name = None
-        in_import_list = False
+        statement_text = source_code[node.start_byte : node.end_byte].decode("utf-8")
 
-        for child in node.children:
-            if child.type == "dotted_name":
-                module_name = source_code[child.start_byte : child.end_byte].decode(
-                    "utf-8"
-                )
-            elif child.type == "import_alias_list":
-                in_import_list = True
-                for alias in child.children:
-                    if alias.type == "import_alias":
-                        name = self._get_child_text(alias, "name", source_code)
-                        if name:
-                            imports.append(
-                                Symbol(
-                                    name=f"{module_name}.{name}" if module_name else name,
-                                    type="import",
-                                    file=file_path,
-                                    line=node.start_point[0] + 1,
-                                    column=node.start_point[1],
-                                )
-                            )
-            elif child.type == "name" and not in_import_list:
-                # Star imports: from X import *
-                if child.text == b"*":
-                    imports.append(
-                        Symbol(
-                            name=f"{module_name}.*" if module_name else "*",
-                            type="import",
-                            file=file_path,
-                            line=node.start_point[0] + 1,
-                            column=node.start_point[1],
-                        )
+        # Parse the from statement to extract module and imported names
+        # Format: from module import name1, name2, ...
+        if " import " not in statement_text:
+            return imports
+
+        from_part, import_part = statement_text.split(" import ", 1)
+        module_name = from_part.replace("from", "").strip()
+
+        # Resolve relative imports in module name
+        resolved_module = self.import_resolver.resolve_python_import(module_name, file_path)
+
+        # Extract individual imports
+        imported_names = ImportResolver.extract_import_names(import_part)
+
+        for name in imported_names:
+            if name == "*":
+                # Star import
+                imports.append(
+                    Symbol(
+                        name=f"{resolved_module}.*",
+                        type="import",
+                        file=file_path,
+                        line=node.start_point[0] + 1,
+                        column=node.start_point[1],
                     )
+                )
+            else:
+                # Named import
+                imports.append(
+                    Symbol(
+                        name=f"{resolved_module}.{name}",
+                        type="import",
+                        file=file_path,
+                        line=node.start_point[0] + 1,
+                        column=node.start_point[1],
+                    )
+                )
 
         return imports
 

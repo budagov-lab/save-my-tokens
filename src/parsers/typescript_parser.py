@@ -6,6 +6,7 @@ from typing import List, Optional
 from tree_sitter import Language, Parser
 
 from src.parsers.symbol import Symbol
+from src.parsers.import_resolver import ImportResolver
 
 # Load Tree-sitter TypeScript grammar
 try:
@@ -20,10 +21,15 @@ except ImportError:
 class TypeScriptParser:
     """Extract symbols from TypeScript source code using Tree-sitter."""
 
-    def __init__(self):
-        """Initialize parser."""
+    def __init__(self, base_path: Optional[str] = None):
+        """Initialize parser.
+
+        Args:
+            base_path: Root directory for resolving relative imports
+        """
         self.parser = Parser()
         self.parser.language = TYPESCRIPT_LANGUAGE
+        self.import_resolver = ImportResolver(base_path)
 
     def parse_file(self, file_path: str) -> List[Symbol]:
         """Parse TypeScript file and extract symbols."""
@@ -238,39 +244,57 @@ class TypeScriptParser:
         imports = []
         source_text = source_code[node.start_byte : node.end_byte].decode("utf-8")
 
-        # Handle: import x from 'y'
+        # Extract from path (what's being imported from)
+        from_path = None
         for child in node.children:
-            if child.type == "import_clause":
-                for clause_child in child.children:
-                    if clause_child.type in (
-                        "namespace_import",
-                        "named_imports",
-                        "identifier",
-                    ):
-                        name = source_code[
-                            clause_child.start_byte : clause_child.end_byte
-                        ].decode("utf-8")
-                        imports.append(
-                            Symbol(
-                                name=name.strip(),
-                                type="import",
-                                file=file_path,
-                                line=node.start_point[0] + 1,
-                                column=node.start_point[1],
-                            )
-                        )
+            if child.type == "string":
+                from_path = source_code[
+                    child.start_byte : child.end_byte
+                ].decode("utf-8").strip('\'"')
+                break
 
-        if not imports:
-            # Fallback: extract entire import
+        if not from_path:
+            return imports
+
+        # Resolve relative imports
+        resolved_path = self.import_resolver.resolve_typescript_import(from_path, file_path)
+
+        # Extract imported names
+        imported_names = ImportResolver.extract_import_names(source_text)
+
+        # If no specific names found, use the path itself
+        if not imported_names:
             imports.append(
                 Symbol(
-                    name=source_text.strip(),
+                    name=resolved_path,
                     type="import",
                     file=file_path,
                     line=node.start_point[0] + 1,
                     column=node.start_point[1],
                 )
             )
+        else:
+            for name in imported_names:
+                if name == "*":
+                    imports.append(
+                        Symbol(
+                            name=f"{resolved_path}.*",
+                            type="import",
+                            file=file_path,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                        )
+                    )
+                else:
+                    imports.append(
+                        Symbol(
+                            name=f"{resolved_path}.{name}",
+                            type="import",
+                            file=file_path,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                        )
+                    )
 
         return imports
 
