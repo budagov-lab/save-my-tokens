@@ -73,8 +73,7 @@ TOKEN_SAVING.md
 IMPLEMENTATION_SUMMARY.md
 PHASE_2_RECOMMENDATIONS.md
 
-# AI assistant config
-CLAUDE.md
+# AI assistant config (CLAUDE.md should be committed)
 .claude/
 
 # Test artifacts
