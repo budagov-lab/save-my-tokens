@@ -1,0 +1,251 @@
+"""Python symbol extractor using Tree-sitter."""
+
+from pathlib import Path
+from typing import List, Optional
+
+from tree_sitter import Language, Parser
+
+from src.parsers.symbol import Symbol
+
+# Load Tree-sitter Python grammar
+try:
+    from tree_sitter import Language
+    from tree_sitter_python import language
+    PYTHON_LANGUAGE = Language(language())
+except ImportError:
+    raise ImportError("tree-sitter-python not installed. Run: pip install tree-sitter-python")
+
+
+class PythonParser:
+    """Extract symbols from Python source code using Tree-sitter."""
+
+    def __init__(self):
+        """Initialize parser."""
+        self.parser = Parser()
+        self.parser.language = PYTHON_LANGUAGE
+
+    def parse_file(self, file_path: str) -> List[Symbol]:
+        """Parse Python file and extract symbols."""
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        with open(file_path, "rb") as f:
+            source_code = f.read()
+
+        tree = self.parser.parse(source_code)
+        symbols = []
+
+        # Extract top-level symbols
+        self._extract_from_node(
+            tree.root_node, source_code, file_path, symbols, parent=None
+        )
+
+        return symbols
+
+    def _extract_from_node(
+        self,
+        node,
+        source_code: bytes,
+        file_path: str,
+        symbols: List[Symbol],
+        parent: Optional[str] = None,
+    ):
+        """Recursively extract symbols from AST node."""
+        if node.type == "function_definition":
+            symbols.append(self._extract_function(node, source_code, file_path, parent))
+            # Extract nested functions/classes
+            self._extract_nested(node, source_code, file_path, symbols, parent)
+
+        elif node.type == "class_definition":
+            class_symbol = self._extract_class(node, source_code, file_path, parent)
+            symbols.append(class_symbol)
+            # Extract class methods
+            self._extract_class_members(
+                node, source_code, file_path, symbols, class_symbol.name
+            )
+
+        elif node.type == "import_statement":
+            symbols.extend(self._extract_imports(node, source_code, file_path))
+
+        elif node.type == "import_from_statement":
+            symbols.extend(self._extract_from_imports(node, source_code, file_path))
+
+        # Recursively process all children
+        for child in node.children:
+            self._extract_from_node(
+                child, source_code, file_path, symbols, parent=parent
+            )
+
+    def _extract_function(
+        self,
+        node,
+        source_code: bytes,
+        file_path: str,
+        parent: Optional[str] = None,
+    ) -> Symbol:
+        """Extract function definition."""
+        name = self._get_child_text(node, "name", source_code)
+        docstring = self._extract_docstring(node, source_code)
+
+        return Symbol(
+            name=name,
+            type="function",
+            file=file_path,
+            line=node.start_point[0] + 1,
+            column=node.start_point[1],
+            docstring=docstring,
+            parent=parent,
+        )
+
+    def _extract_class(
+        self,
+        node,
+        source_code: bytes,
+        file_path: str,
+        parent: Optional[str] = None,
+    ) -> Symbol:
+        """Extract class definition."""
+        name = self._get_child_text(node, "name", source_code)
+        docstring = self._extract_docstring(node, source_code)
+
+        return Symbol(
+            name=name,
+            type="class",
+            file=file_path,
+            line=node.start_point[0] + 1,
+            column=node.start_point[1],
+            docstring=docstring,
+            parent=parent,
+        )
+
+    def _extract_class_members(
+        self,
+        class_node,
+        source_code: bytes,
+        file_path: str,
+        symbols: List[Symbol],
+        class_name: str,
+    ):
+        """Extract methods from class body."""
+        # Find class body block
+        for child in class_node.children:
+            if child.type == "block":
+                for stmt in child.children:
+                    if stmt.type == "function_definition":
+                        method = self._extract_function(
+                            stmt, source_code, file_path, class_name
+                        )
+                        symbols.append(method)
+
+    def _extract_nested(
+        self,
+        node,
+        source_code: bytes,
+        file_path: str,
+        symbols: List[Symbol],
+        parent: Optional[str] = None,
+    ):
+        """Extract nested functions/classes inside function body."""
+        for child in node.children:
+            if child.type == "block":
+                for stmt in child.children:
+                    if stmt.type == "function_definition":
+                        nested = self._extract_function(
+                            stmt, source_code, file_path, parent
+                        )
+                        symbols.append(nested)
+                    elif stmt.type == "class_definition":
+                        nested_class = self._extract_class(
+                            stmt, source_code, file_path, parent
+                        )
+                        symbols.append(nested_class)
+
+    def _extract_imports(
+        self, node, source_code: bytes, file_path: str
+    ) -> List[Symbol]:
+        """Extract symbols from 'import X' statement."""
+        imports = []
+        # import_statement has dotted_name or aliased_import children
+        for child in node.children:
+            if child.type in ("dotted_name", "dotted_as_name", "aliased_import"):
+                name = source_code[child.start_byte : child.end_byte].decode("utf-8")
+                imports.append(
+                    Symbol(
+                        name=name,
+                        type="import",
+                        file=file_path,
+                        line=node.start_point[0] + 1,
+                        column=node.start_point[1],
+                    )
+                )
+        return imports
+
+    def _extract_from_imports(
+        self, node, source_code: bytes, file_path: str
+    ) -> List[Symbol]:
+        """Extract symbols from 'from X import Y' statement."""
+        imports = []
+        module_name = None
+        in_import_list = False
+
+        for child in node.children:
+            if child.type == "dotted_name":
+                module_name = source_code[child.start_byte : child.end_byte].decode(
+                    "utf-8"
+                )
+            elif child.type == "import_alias_list":
+                in_import_list = True
+                for alias in child.children:
+                    if alias.type == "import_alias":
+                        name = self._get_child_text(alias, "name", source_code)
+                        if name:
+                            imports.append(
+                                Symbol(
+                                    name=f"{module_name}.{name}" if module_name else name,
+                                    type="import",
+                                    file=file_path,
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                )
+                            )
+            elif child.type == "name" and not in_import_list:
+                # Star imports: from X import *
+                if child.text == b"*":
+                    imports.append(
+                        Symbol(
+                            name=f"{module_name}.*" if module_name else "*",
+                            type="import",
+                            file=file_path,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                        )
+                    )
+
+        return imports
+
+    def _extract_docstring(self, node, source_code: bytes) -> Optional[str]:
+        """Extract docstring from function/class."""
+        # Docstring is first string literal in the body
+        for child in node.children:
+            if child.type == "block":
+                for stmt in child.children:
+                    if stmt.type == "expression_statement":
+                        if stmt.child_count > 0:
+                            first_child = stmt.children[0]
+                            if first_child.type == "string":
+                                docstring = source_code[
+                                    first_child.start_byte : first_child.end_byte
+                                ].decode("utf-8")
+                                # Remove quotes
+                                return docstring.strip('\'"')
+        return None
+
+    def _get_child_text(
+        self, node, field_name: str, source_code: bytes
+    ) -> Optional[str]:
+        """Get text of child node by field name."""
+        child = node.child_by_field_name(field_name)
+        if child:
+            return source_code[child.start_byte : child.end_byte].decode("utf-8")
+        return None
