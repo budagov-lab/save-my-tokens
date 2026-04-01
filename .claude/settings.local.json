@@ -47,7 +47,9 @@
       "Bash(python -m pytest tests/unit/test_parsers_python.py::test_parse_empty_file -xvs)",
       "Bash(python)",
       "Bash(python -c \"from tree_sitter import Parser; help\\(Parser.__init__\\)\")",
-      "Bash(python -c \"import tree_sitter; print\\(f'tree-sitter version: {tree_sitter.__version__}'\\)\")"
+      "Bash(python -c \"import tree_sitter; print\\(f'tree-sitter version: {tree_sitter.__version__}'\\)\")",
+      "Bash(python -m pytest tests/unit/test_symbol_index.py -v --tb=short)",
+      "Bash(python -m pytest tests/unit/test_symbol_index.py::test_add_single_symbol -xvs)"
     ]
   }
 }
