@@ -64,14 +64,7 @@ yarn-error.log
 fixtures/test_repos/
 
 # Internal planning docs
-DEVELOPMENT_TASKS.md
-PROGRESS.md
-WORKING_PLAN.md
-Phase_1_MVP_Revised.md
-TESTING_PLAN.md
-TOKEN_SAVING.md
-IMPLEMENTATION_SUMMARY.md
-PHASE_2_RECOMMENDATIONS.md
+docs/internal/
 
 # AI assistant config (CLAUDE.md should be committed)
 .claude/
