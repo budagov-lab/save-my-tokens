@@ -10,7 +10,27 @@
       "Bash(git remote:*)",
       "Bash(git branch:*)",
       "Bash(git push:*)",
-      "Bash(git commit -m 'Task #1: Initialize project repository structure:*)"
+      "Bash(git commit -m 'Task #1: Initialize project repository structure:*)",
+      "Skill(update-config)",
+      "Bash(python -m venv venv)",
+      "Bash(/c/Users/LENOVO/Desktop/Projects/SYT/venv/Scripts/pip install:*)",
+      "Bash(ls:*)",
+      "Bash(rm -rf venv)",
+      "Bash(venv/Scripts/python -m pip install --upgrade pip setuptools wheel)",
+      "Bash(venv/Scripts/python -m ensurepip --upgrade)",
+      "Bash(\"./venv/Scripts/python\" -m ensurepip --upgrade)",
+      "Bash(python -m venv venv --upgrade-deps)",
+      "Bash(python -m pip install -e \".[dev]\")",
+      "Bash(\"./venv/Scripts/pip\" install:*)",
+      "Bash(python -m pip install --upgrade pip)",
+      "Bash(./venv/Scripts/pip install:*)",
+      "Bash(./venv/Scripts/python -c \"import tree_sitter; import neo4j; import fastapi; print\\('All imports successful'\\)\")",
+      "Bash(./venv/Scripts/python -m pip list)",
+      "Bash(python -m pip install tree-sitter tree-sitter-python tree-sitter-typescript neo4j fastapi uvicorn pydantic loguru pytest pytest-cov black isort mypy)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose ps:*)",
+      "Bash(docker --version)",
+      "Bash(du -sh *)"
     ]
   }
 }

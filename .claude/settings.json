@@ -11,14 +11,7 @@
       "Edit(.claude/**)",
       "Write(src/**)",
       "Write(tests/**)",
-      "Bash(python:*)",
-      "Bash(pip:*)",
-      "Bash(npm:*)",
-      "Bash(docker:*)",
-      "Bash(git:*)",
-      "Bash(pytest:*)",
-      "Bash(mypy:*)",
-      "Bash(pylint:*)"
+      "Bash"
     ],
     "deny": [
       "Bash(rm -rf:*)",
@@ -28,8 +21,6 @@
       "Write(C:\\Windows\\**)"
     ],
     "ask": [
-      "Bash(git push:*)",
-      "Bash(git commit:*)",
       "Write(README.md)",
       "Write(CLAUDE.md)"
     ]
