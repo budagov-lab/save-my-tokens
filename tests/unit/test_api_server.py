@@ -1,4 +1,8 @@
-"""Unit tests for API server."""
+"""Unit tests for minimal API server (health/stats only).
+
+NOTE: Full REST API endpoints (context, subgraph, search, validate-conflicts)
+have been removed in favor of MCP server. Only health/stats endpoints remain.
+"""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -31,10 +35,17 @@ def test_stats_endpoint(client):
     assert "edge_count" in data
 
 
-def test_openapi_schema(client):
-    """Test OpenAPI schema is accessible."""
+def test_rest_api_removed(client):
+    """Verify deprecated REST API endpoints are removed."""
+    # All these should return 404
+    assert client.get("/api/context/test").status_code == 404
+    assert client.get("/api/subgraph/test").status_code == 404
+    assert client.get("/api/search?query=test").status_code == 404
+    assert client.post("/api/validate-conflicts", json={"tasks": []}).status_code == 404
+
+
+def test_openapi_disabled(client):
+    """Verify OpenAPI schema is disabled (minimal API)."""
     response = client.get("/openapi.json")
-    assert response.status_code == 200
-    schema = response.json()
-    assert "openapi" in schema
-    assert "paths" in schema
+    # Disabled in create_app
+    assert response.status_code == 404
