@@ -75,7 +75,7 @@ PHASE_2_RECOMMENDATIONS.md
 
 # AI assistant config
 CLAUDE.md
-.claude/settings.local.json
+.claude/
 
 # Test artifacts
 DECISION_BRIEF.txt
