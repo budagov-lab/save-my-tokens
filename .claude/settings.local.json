@@ -30,7 +30,17 @@
       "Bash(docker-compose up:*)",
       "Bash(docker-compose ps:*)",
       "Bash(docker --version)",
-      "Bash(du -sh *)"
+      "Bash(du -sh *)",
+      "Bash(rm:*)",
+      "Bash(python -m ensurepip --upgrade)",
+      "Bash(python -m pip install neo4j fastapi uvicorn pydantic loguru --quiet)",
+      "Bash(python -c \"import neo4j; import fastapi; import pydantic; print\\('✓ Core packages installed successfully'\\)\")",
+      "Bash(python -m pip list)",
+      "Bash(python -m pip install tree-sitter pytest pytest-cov black --quiet)",
+      "Bash(python -c ':*)",
+      "Bash(timeout 5 python -m uvicorn src.api.server:app --port 8000)",
+      "Bash(python -c \"from src.api.server import app; print\\('✓ API server loads successfully'\\)\")",
+      "Bash(python -c \"from src.api.server import app; print\\('OK: API server loads successfully'\\)\")"
     ]
   }
 }
