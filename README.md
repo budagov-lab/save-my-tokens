@@ -31,25 +31,23 @@ SMT gives Claude agents a smart code map:
 
 **The benefit:** Solve 11x more code problems per conversation, faster inference, lower API costs.
 
-## Quick Start (3 minutes)
+## Installation
 
-### Installation
+**Two paths depending on your needs:**
 
-**Windows:**
-```cmd
-install.bat
-```
+### 🚀 Path 1: One-Click Setup (Recommended for most users)
 
-**macOS / Linux:**
 ```bash
+# Windows
+install.bat
+
+# macOS / Linux
 bash install.sh
 ```
 
-That's it! The script handles everything.
+✅ **3 minutes | Automated | Zero hassle**
 
-### Manual Setup
-
-If the scripts don't work:
+### 👨‍💻 Path 2: Developer Setup (For contributors & customization)
 
 ```bash
 git clone https://github.com/budagov-lab/smt-graph.git
@@ -58,9 +56,27 @@ python -m venv venv && source venv/bin/activate
 pip install -e .
 ```
 
-### Connect to Claude Code
+✅ **5 minutes | Full control | Edit code freely**
 
-See [INSTALL.md](INSTALL.md) for step-by-step configuration.
+### 📖 Details
+
+See [INSTALL_PATHS.md](INSTALL_PATHS.md) for detailed comparison and when to use each path.
+
+### ⚙️ Configure Claude Code
+
+After installation, add 5 lines to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": [{
+    "name": "smt-graph",
+    "command": "python",
+    "args": ["/path/to/smt-graph/run_mcp.py"]
+  }]
+}
+```
+
+Restart Claude Code. Done!
 
 ### Start Using
 
@@ -241,8 +257,12 @@ All components gracefully degrade if optional services unavailable.
 ## Documentation
 
 **Getting Started:**
-- **[INSTALL.md](INSTALL.md)** — 3-minute one-click installation (START HERE!)
-- **[MCP Examples](docs/MCP_EXAMPLES.md)** — Real-world usage examples & patterns
+- **[INSTALL_PATHS.md](INSTALL_PATHS.md)** — Choose your installation path (one-click vs developer)
+- **[INSTALL.md](INSTALL.md)** — Step-by-step setup guide
+- **[POSITIONING.md](POSITIONING.md)** — What SMT does & why you need it
+
+**Usage:**
+- **[MCP Examples](docs/MCP_EXAMPLES.md)** — 6 real-world usage examples
 - **[MCP Cheatsheet](docs/MCP_CHEATSHEET.md)** — Quick reference for all 10 tools
 
 **Deep Dives:**
