@@ -1,0 +1,130 @@
+================================================================================
+CONNECT SMT WITH GITHUB - 5 MINUTES
+================================================================================
+
+STEP 1: Create GitHub Token
+────────────────────────────────────────────────────────────────────────────────
+    1. Go to: https://github.com/settings/tokens
+    2. Click: "Generate new token (classic)"
+    3. Name: smt-graph
+    4. Check: repo, read:org
+    5. Copy the token (save it!)
+
+    Token looks like: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+STEP 2: Set Environment Variable (Choose Your System)
+────────────────────────────────────────────────────────────────────────────────
+
+WINDOWS (PowerShell):
+    $env:GITHUB_TOKEN = "ghp_xxxxxxxxx"
+
+WINDOWS (Command Prompt):
+    set GITHUB_TOKEN=ghp_xxxxxxxxx
+
+macOS / Linux:
+    export GITHUB_TOKEN=ghp_xxxxxxxxx
+
+
+STEP 3: Run SMT
+────────────────────────────────────────────────────────────────────────────────
+    python run.py
+
+
+STEP 4: Check GitHub Connection
+────────────────────────────────────────────────────────────────────────────────
+    python run.py graph --check
+
+    EXPECTED OUTPUT:
+        Database: save_my_tokens
+        Branch: main
+        Open PRs: 2  ← GitHub is connected!
+        Status: READY FOR MCP
+
+
+STEP 5: Switch to PR Branch & See PR Info
+────────────────────────────────────────────────────────────────────────────────
+    git checkout feature/auth
+    python run.py graph --check
+
+    EXPECTED OUTPUT:
+        Database: save_my_tokens
+        Branch: feature/auth
+        Pull Request: #42 - Add authentication
+        Author: alice
+        Status: READY FOR MCP
+
+
+================================================================================
+MAKE IT PERMANENT (Optional)
+================================================================================
+
+Create .env file in project root:
+
+    GITHUB_TOKEN=ghp_xxxxxxxxx
+    GITHUB_USER=your_username
+
+Then run:
+    python run.py
+
+
+================================================================================
+VERIFY IT WORKS
+================================================================================
+
+Check authentication:
+    gh auth status
+
+    Should show:
+        Logged in to github.com as [your-username]
+
+List PRs:
+    gh pr list
+
+    Shows all open PRs in your repo
+
+
+================================================================================
+WHAT NOW WORKS
+================================================================================
+
+✓ SMT knows which branch you're on
+✓ SMT shows PR number and title
+✓ SMT shows PR author
+✓ Claude sees GitHub context
+✓ Team collaboration is tracked
+✓ Automatic PR context for code review
+
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+PROBLEM: "GitHub integration not configured"
+SOLUTION:
+    1. Create token at: https://github.com/settings/tokens
+    2. Set: export GITHUB_TOKEN=ghp_xxx
+    3. Run: python run.py graph --check
+
+PROBLEM: "Open PRs: 0" but PRs exist
+SOLUTION:
+    1. Check token permissions (repo, read:org)
+    2. Verify token is not expired
+    3. Run: gh auth status
+
+PROBLEM: "gh: command not found"
+SOLUTION:
+    Install GitHub CLI:
+    - Windows: winget install GitHub.cli
+    - macOS: brew install gh
+    - Linux: sudo apt install gh
+
+
+================================================================================
+DONE!
+================================================================================
+
+SMT is now connected to GitHub.
+All team members can follow same steps.
+
+Next: Push your code and SMT will track everything!
