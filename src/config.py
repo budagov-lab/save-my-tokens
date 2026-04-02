@@ -52,7 +52,7 @@ class Settings(BaseSettings):
         # Security warning: check for default password
         if self.NEO4J_PASSWORD == "password" and self.DEBUG:
             print(
-                "⚠️  WARNING: Using default Neo4j password 'password'. "
+                "[WARNING] Using default Neo4j password 'password'. "
                 "Set NEO4J_PASSWORD environment variable for production."
             )
 

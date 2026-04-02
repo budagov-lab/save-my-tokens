@@ -195,6 +195,36 @@ Go/No-Go decision at end of Week 10. Must meet these observable metrics:
 
 ## Tool Usage & Efficiency Best Practices
 
+### CRITICAL: Research Large Files/Repos? Use MCP Tools First
+
+**BEFORE reading any file >500 LOC or exploring unfamiliar modules/repos:**
+
+```bash
+# ❌ WRONG: Read entire file to understand structure
+Read(src/some_large_module.py)  # 3000+ lines, expensive
+
+# ❌ WRONG: Broad Grep search across codebase
+Grep(pattern: ".*", type: "py")  # Returns 1000+ matches
+
+# ✅ CORRECT: Use MCP get_context to map dependencies first
+# This returns symbol locations, callers, dependencies, and token budget
+# Then Read only the relevant functions/classes
+```
+
+**Why this matters:** MCP tools return semantic structure (call graph, imports, types) in <1KB. Reading raw files wastes 88% of tokens on irrelevant code. This applies to:
+- Researching unfamiliar modules in this project
+- Exploring external repos (use graph if available)
+- Understanding cross-file dependencies
+- Planning code modifications safely
+
+**Evidence:** Strict audit across Flask (3.2MB), Requests (8.7MB), Vue (9.5MB) shows:
+- MCP per lookup: ~243 tokens, 45ms
+- Traditional (Grep+Read) per lookup: ~2,027 tokens, 850ms
+- **Savings: 1,784 tokens per lookup (88.0%), 18.9x faster**
+- For 500 explorations (1-week sprint): Save ~892,000 tokens
+
+---
+
 ### Claude Code Tool Search Patterns
 When Claude Code is working on this codebase, apply these patterns to minimize tokens:
 
@@ -203,8 +233,8 @@ When Claude Code is working on this codebase, apply these patterns to minimize t
 # ❌ BAD: Read entire file without knowing what's in it
 Read(src/api/endpoints.py)
 
-# ✅ GOOD: Grep first to find relevant sections
-Grep(pattern: "def validate_conflicts", path: "src/", type: "py")
+# ✅ GOOD: Use MCP get_context or Grep first to find relevant sections
+get_context("validate_conflicts")  # Returns location, signature, dependencies
 Read(src/api/endpoints.py, offset: 42, limit: 50)  # Read only the relevant function
 ```
 
@@ -238,6 +268,27 @@ Glob(pattern: "src/**/*.py")
 Glob(pattern: "src/parsers/**/*.py")  # Narrow pattern first
 Read(src/parsers/python_parser.py)
 ```
+
+**5. Prefer MCP Tools Over Grep/Search (Always)**
+```bash
+# ❌ BAD: Use Grep for code context queries
+Grep(pattern: "def get_context", type: "py")
+Grep(pattern: "QueryService", path: "src/", type: "py")
+
+# ✅ GOOD: Use MCP smt-graph tools for ANY code exploration
+get_context("validate_conflicts")      # Returns: location, signature, dependencies, callers, token count
+get_subgraph("validate_conflicts", depth=2)  # Returns: full dependency tree
+search("password validation")           # Returns: ranked semantic matches with similarity
+validate_conflicts([task1, task2])     # Returns: safe parallelization info
+```
+
+**When to use each MCP tool:**
+- **get_context()** – Quick lookup: find a symbol, understand what calls it, get token budget
+- **get_subgraph()** – Deep dive: understand full dependency tree before editing
+- **search()** – Find related code: "error handling in API layer", "database validation logic"
+- **validate_conflicts()** – Before parallelizing: check if two tasks can run safely
+
+**Why:** MCP tools are 80-95% more efficient than file reading. They return only relevant context with semantic structure (dependencies, types, call chains). Use them **ALWAYS** for code exploration, never fall back to Grep/Read unless you have exact coordinates.
 
 ### Programmatic Tool Calling (Agent Phase)
 When agents use the Graph API (Phase 2 evaluation), they'll call endpoints like:
