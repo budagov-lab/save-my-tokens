@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "smt-graph": {
+    "smt": {
       "command": "python",
-      "args": ["C:\\Users\\LENOVO\\Desktop\\Projects\\SYT\\run_mcp.py"]
+      "args": ["C:\\Users\\LENOVO\\Desktop\\Projects\\SYT\\run.py"]
     }
   }
 }
