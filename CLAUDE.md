@@ -4,6 +4,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## 🚀 MCP Tools
+
+This project has 10 MCP tools available automatically:
+
+### Graph Queries
+- `get_context(symbol)` — Definition + callers + dependencies
+- `get_subgraph(symbol)` — Full dependency tree
+- `semantic_search(query)` — Find code by meaning
+- `validate_conflicts(tasks)` — Check if changes conflict
+
+### Contracts
+- `extract_contract(code)` — Parse signatures & types
+- `compare_contracts(old, new)` — Detect breaking changes
+
+### Git & Updates
+- `parse_diff()` — Analyze changes
+- `apply_diff()` — Update graph from commits
+
+### Task Scheduling
+- `schedule_tasks(tasks)` — Build execution plan
+- `execute_tasks(plan)` — Run with dependency resolution
+
+**These are available automatically.** Just ask Claude about your code and it will use them.
+
+---
+
+---
+
 ## Project Overview
 
 **Project:** Codebase Project OS for Parallel Agents  
@@ -211,17 +239,11 @@ Grep(pattern: ".*", type: "py")  # Returns 1000+ matches
 # Then Read only the relevant functions/classes
 ```
 
-**Why this matters:** MCP tools return semantic structure (call graph, imports, types) in <1KB. Reading raw files wastes 88% of tokens on irrelevant code. This applies to:
+**Why this matters:** MCP tools return semantic structure (call graph, imports, types). Reading raw files wastes tokens on irrelevant code. Use MCP tools for:
 - Researching unfamiliar modules in this project
 - Exploring external repos (use graph if available)
 - Understanding cross-file dependencies
 - Planning code modifications safely
-
-**Evidence:** Strict audit across Flask (3.2MB), Requests (8.7MB), Vue (9.5MB) shows:
-- MCP per lookup: ~243 tokens, 45ms
-- Traditional (Grep+Read) per lookup: ~2,027 tokens, 850ms
-- **Savings: 1,784 tokens per lookup (88.0%), 18.9x faster**
-- For 500 explorations (1-week sprint): Save ~892,000 tokens
 
 ---
 
@@ -307,7 +329,7 @@ GET /api/context/{symbol_name}?depth=1&include_callers=true
 }
 ```
 
-**Why this pattern matters:** Instead of agents retrieving entire files (5000+ tokens), they query only what's needed (~800 tokens), reducing waste by 80%+.
+**Why this pattern matters:** Agents should query only what's needed instead of retrieving entire files.
 
 **For Phase 1 development:** Claude Code uses file-based access normally. But the **tests** should verify that the Graph API returns minimal payloads (<50KB median, as per success criteria).
 
