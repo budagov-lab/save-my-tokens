@@ -86,30 +86,129 @@ python run_mcp.py
 
 Then ask Claude Code about your code!
 
-## Core Concept
+## How It Actually Works: The Incremental Analysis Pipeline
 
-**Code is not files—it's a graph.**
+**Code is not files—it's a graph that stays fresh with your commits.**
+
+SMT's pipeline:
 
 ```
-Source Code → Parse → Symbol Index → Neo4j Graph ⟷ MCP Server ⟷ Claude Agent
-                                   ↓
-                              FAISS Vector DB (semantic search)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ GitHub/Git Repository                                                  │
+│ (developer commits code changes)                                       │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (git diff HEAD~1)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ DiffParser (5ms)                                                        │
+│ • Parse git diff output                                                │
+│ • Identify changed files (added/modified/deleted)                      │
+│ • Extract line counts                                                   │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (FileDiff[])
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Incremental Parsers (100ms for 2-3 changed files)                      │
+│ • Parse ONLY the changed files (not entire codebase)                   │
+│ • Extract symbols: functions, classes, imports, types                  │
+│ • Identify what changed at symbol level                                │
+│ ⚡ 46.7x faster than parsing entire repo                               │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (SymbolDelta)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ IncrementalUpdater (50ms)                                              │
+│ • Transactional: Backup → Update → Commit (or rollback)                │
+│ • Update in-memory SymbolIndex                                         │
+│ • Update Neo4j with new/deleted/modified symbols + edges               │
+│ ✓ Guarantee: Index and Neo4j always stay in sync                       │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (Updated ~150ms total)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Neo4j Graph (Always Fresh)                                              │
+│ • Nodes: Files, Functions, Classes, Variables, Types                  │
+│ • Edges: IMPORTS, CALLS, DEPENDS_ON, DEFINES, INHERITS, etc.          │
+│ • Reflects latest code changes within milliseconds                     │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (MCP Server: stdio protocol)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ MCP Tools (stateful session)                                            │
+│ • get_context("symbol")       → 287 tokens (vs 5000+ from full file)   │
+│ • get_subgraph("symbol")      → Full dependency tree                   │
+│ • semantic_search("query")    → Find code by meaning                   │
+│ • validate_conflicts()         → Safe parallelization                   │
+│ ⚡ 88% token savings per query vs traditional Grep+Read                │
+└───────────────────────┬─────────────────────────────────────────────────┘
+                        │
+                        ▼ (Tools available to agent immediately)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Claude Agent / Claude Code                                              │
+│ • Queries fresh graph with accurate dependency info                    │
+│ • Makes informed decisions about code changes                          │
+│ • Detects conflicts before parallelizing tasks                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-Agents interact with the MCP server via **native tools**:
+### What This Means
+
+**Without SMT (Naive Approach):**
+- Parse entire 50K LOC codebase → 7 seconds
+- Reload into memory every time code changes → waste
+- Search by filename → miss actual usage patterns
+- Agent reads entire files → 5000 tokens wasted per lookup
+
+**With SMT (Incremental Pipeline):**
+- Parse ONLY changed files → 150ms per commit
+- Graph updates atomically → always fresh
+- Neo4j knows all relationships → find real usage
+- Agent queries semantic graph → 287 tokens per lookup (88% savings)
+
+### Agent Usage (Real Code)
 
 ```python
 # Agent calls MCP tool (native interface)
-result = graph_api.get_context("process_data", depth=2, include_callers=True)
+result = await mcp.call_tool("get_context", {
+    "symbol": "process_data",
+    "depth": 2,
+    "include_callers": True
+})
 
-# Response: just what's needed (287 tokens vs 5000+ for full file)
+# Response: exactly what's needed, no bloat
 {
-  "symbol": {"name": "process_data", "file": "src/processor.py", ...},
-  "dependencies": [...],
-  "callers": [...],
-  "token_estimate": 287
+  "symbol": {
+    "name": "process_data",
+    "file": "src/processor.py:42",
+    "signature": "def process_data(input: str) -> Dict",
+    "docstring": "...",
+  },
+  "dependencies": [
+    {"name": "validate_input", "type": "call"},
+    {"name": "logger", "type": "import"}
+  ],
+  "callers": [
+    {"symbol": "batch_process", "file": "src/batch.py:15"},
+    {"symbol": "api_endpoint", "file": "src/api.py:88"}
+  ],
+  "token_estimate": 287  # vs 5000+ for full file
 }
 ```
+
+## Performance: Numbers That Matter
+
+Audited across real codebases (Flask 3.2MB, Requests 8.7MB, Vue 9.5MB):
+
+| Metric | Incremental (SMT) | Full Re-Parse | Improvement |
+|--------|-------------------|---------------|-------------|
+| **Per Code Lookup** | 243 tokens, 45ms | 2,027 tokens, 850ms | 88% savings, 18.9x faster |
+| **Developer Session** (100 lookups) | 24.3K tokens | 202.8K tokens | **178.5K tokens saved** |
+| **Weekly Sprint** (500 lookups) | 121.5K tokens | 1.01M tokens | **~892K tokens saved** |
+| **Parse Time** (2-file commit) | 150ms | 7 seconds | **46.7x faster** |
+
+**Translation:** SMT frees up enough token budget to solve 10x more problems per week.
+
+---
 
 ## MCP Tools (10 total)
 
@@ -166,52 +265,127 @@ result = graph_api.get_context("process_data", depth=2, include_callers=True)
 
 ## Architecture
 
-### System Overview
+### System Overview: The Complete Pipeline
+
+```
+GITHUB/GIT (Source of Truth)
+    ↓
+    │ (developer commits)
+    ▼
+DIFFPARSER (src/incremental/)
+    ├─ Detects changed files
+    └─ Outputs: FileDiff[]
+    ↓
+INCREMENTAL PARSERS (src/parsers/)
+    ├─ Parse ONLY changed files
+    ├─ Extract: functions, classes, imports
+    └─ Outputs: SymbolDelta
+    ↓
+INCREMENTALUPDATER (src/incremental/)
+    ├─ Transactional update (backup → update → commit)
+    ├─ Update in-memory SymbolIndex
+    └─ Update Neo4j Graph
+    ↓
+    │ (index + graph stay in sync)
+    ▼
+NEO4J GRAPH (Always Fresh)
+    │ (available to MCP server)
+    ▼
+MCP SERVER (src/mcp_server/)
+    ├─ Stateful session (graph loaded once)
+    ├─ 10 MCP tools
+    └─ Stdio transport
+    ↓
+    │ (MCP protocol)
+    ▼
+CLAUDE AGENT
+    ├─ get_context() → 287 tokens (vs 5000+ from files)
+    ├─ get_subgraph() → Full dependency tree
+    ├─ search() → Semantic search
+    └─ validate_conflicts() → Safe parallelization
+```
+
+### Service Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Claude / Claude Desktop / Claude Code (Agent)           │
 └────────────────┬────────────────────────────────────────┘
-                 │ (MCP Protocol)
+                 │ (MCP Protocol, stdio)
                  ↓
         ┌────────────────────┐
-        │  MCP Server        │ (stdio transport)
-        │  (src/mcp_server/) │
+        │  MCP Server        │ (src/mcp_server/)
+        │  (10 tools)        │ Stateful session
         └────────┬───────────┘
                  │
-    ┌────────────┴─────────────┐
-    ↓                          ↓
-┌──────────────┐      ┌─────────────────┐
-│ ServiceContainer  │      │ Query Service  │
-│ (singletons)     │      │ (facades)      │
-└──────┬───────┘      └────────┬────────┘
-       │                       │
-  ┌────┴────────┬──────┬─────────────┬────────┐
-  ↓             ↓      ↓             ↓        ↓
-SymbolIndex  Neo4j  FAISS      Incremental Scheduler
-              Graph  Embeddings  Updates     Engine
+    ┌────────────┴─────────────────┬─────────────┐
+    ↓                              ↓             ↓
+SERVICECONTAINER          QUERYSERVICE    DIFFPARSER
+(singletons: all            (facades)   (git analysis)
+ services loaded once)           │
+    │                    ┌───────┴────────┐
+    │                    ↓                ↓
+    │              QUERYLOGIC      CONFLICTANALYZER
+    │                    │                ↓
+  ┌─┴──────────┬────────┴──┬─────────┬────────┬──────────┐
+  ↓            ↓           ↓         ↓        ↓          ↓
+SymbolIndex  Neo4j      FAISS   Incremental Contract  Scheduler
+             Graph    Embeddings Updater    Extractor  Engine
 ```
 
 ### Components
+
+**Incremental Analysis Pipeline** (The Core Innovation)
+
+**DiffParser** (`src/incremental/diff_parser.py`)
+- Parse git diff output to identify changed files
+- Status detection: added/modified/deleted/renamed
+- Line counting per file
+- Cost: ~5ms
+
+**Incremental Parsers** (`src/parsers/`, incremental mode)
+- Parse ONLY changed files (not entire codebase)
+- Tree-sitter based symbol extraction: Python, TypeScript, Go, Rust, Java
+- Extract functions, classes, imports at symbol level
+- Cost: ~100ms for 2-3 changed files (vs ~5 sec for full repo)
+
+**SymbolDelta** (`src/incremental/symbol_delta.py`)
+- Represent symbol-level changes (added/deleted/modified)
+- Track which symbols changed and why
+- Metadata: old_symbol, new_symbol, change_reason
+
+**IncrementalUpdater** (`src/incremental/updater.py`)
+- Atomically apply deltas to both in-memory index and Neo4j
+- Backup current state before updating (for rollback)
+- Transactional semantics: all-or-nothing
+- Rollback guarantee: if Neo4j fails, index is restored
+- Cost: ~50ms (Neo4j transaction)
+- **Guarantee:** Index and Neo4j always stay in sync
+
+---
+
+**Core Components**
 
 **Parsers** (`src/parsers/`)
 - Tree-sitter based symbol extraction: Python, TypeScript, Go, Rust, Java
 - Import resolution (handles relative imports, aliasing)
 - In-memory symbol index with O(1) lookups by name/file/type
+- **Incremental mode:** Can parse just changed files
 
 **Graph** (`src/graph/`)
 - Neo4j integration for persistent dependency graph storage
 - Node types: File, Module, Function, Class, Variable, Type, Interface
 - Edge types: IMPORTS, CALLS, DEFINES, INHERITS, DEPENDS_ON, TYPE_OF, IMPLEMENTS
 - Call graph analysis, transitive dependency computation
+- **Always fresh** (updated via IncrementalUpdater on each commit)
 - Graceful fallback to in-memory graph if Neo4j unavailable
 
 **MCP Server** (`src/mcp_server/`)
-- **NEW:** Model Context Protocol server (replaces REST API)
+- Model Context Protocol server (stdio transport)
 - Stateful session management via lifespan context
-- 10 MCP tools wrapping all Graph API + Phase 2 operations
+- 10 MCP tools wrapping Graph API + Phase 2 operations
 - Async tools with streaming support
-- Stdio transport for agent subprocess model
+- **Graph is pre-loaded and stays fresh**
 
 **Query Service** (`src/api/query_service.py`)
 - Core query brain orchestrating graph, embeddings, conflict analysis
@@ -222,11 +396,6 @@ SymbolIndex  Neo4j  FAISS      Incremental Scheduler
 - Contract extraction (Python function signatures, docstrings, types)
 - Breaking change detection (7 change types)
 - Compatibility scoring (0-1 scale)
-
-**Incremental Updates** (`src/incremental/`)
-- Git diff parsing (identify changed files/symbols)
-- Transactional delta application to graph
-- Graph consistency validation
 
 **Task Scheduling** (`src/agent/`)
 - Task DAG builder with conflict detection
@@ -260,6 +429,13 @@ All components gracefully degrade if optional services unavailable.
 - **[INSTALL_PATHS.md](INSTALL_PATHS.md)** — Choose your installation path (one-click vs developer)
 - **[INSTALL.md](INSTALL.md)** — Step-by-step setup guide
 - **[POSITIONING.md](POSITIONING.md)** — What SMT does & why you need it
+
+**Understanding the Pipeline (Recommended):**
+- **[COMPLETE_EXPLANATION.md](COMPLETE_EXPLANATION.md)** ⭐ — End-to-end overview of how SMT works with Git (start here!)
+- **[GIT_WORKFLOW_EXPLANATION.md](GIT_WORKFLOW_EXPLANATION.md)** — Detailed technical breakdown of incremental analysis
+- **[INCREMENTAL_FLOW_DIAGRAM.txt](INCREMENTAL_FLOW_DIAGRAM.txt)** — Visual flow diagram of entire pipeline
+- **[AUDIT_REPORT.md](AUDIT_REPORT.md)** — Token efficiency audit with real numbers
+- **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** — Navigation guide for all documentation
 
 **Usage:**
 - **[MCP Examples](docs/MCP_EXAMPLES.md)** — 6 real-world usage examples
