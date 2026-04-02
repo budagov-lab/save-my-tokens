@@ -11,6 +11,7 @@ Usage:
 """
 
 import sys
+import json
 import argparse
 from pathlib import Path
 
@@ -120,6 +121,10 @@ def start_mcp() -> bool:
     """Start MCP server."""
     try:
         from src.mcp_server.entrypoint import main as mcp_main
+        project_root = Path(__file__).parent
+
+        logger.info("Setting up Claude Code configuration...")
+        ensure_claude_config(project_root)
 
         logger.info("Initializing graph for MCP...")
 
@@ -202,13 +207,47 @@ def _add_commits(client: Neo4jClient) -> None:
     logger.info(f"Added {len(commits)} commits")
 
 
+def ensure_claude_config(project_root: Path) -> None:
+    """Ensure Claude Code configuration files exist."""
+    claude_dir = project_root / '.claude'
+    claude_dir.mkdir(exist_ok=True)
+
+    # Create .mcp.json if missing
+    mcp_file = project_root / '.mcp.json'
+    if not mcp_file.exists():
+        logger.info("Creating .mcp.json...")
+        mcp_config = {
+            "mcpServers": {
+                "smt": {
+                    "command": "python",
+                    "args": [str(project_root / "run.py")]
+                }
+            }
+        }
+        with open(mcp_file, 'w') as f:
+            json.dump(mcp_config, f, indent=2)
+
+    # Create .claude/workspace.json if missing
+    workspace_file = claude_dir / 'workspace.json'
+    if not workspace_file.exists():
+        logger.info("Creating .claude/workspace.json...")
+        workspace_config = {
+            "mcp_enabled": True,
+            "graph_auto_sync": True,
+            "graph_base_path": "src",
+            "neo4j_uri": "bolt://localhost:7687"
+        }
+        with open(workspace_file, 'w') as f:
+            json.dump(workspace_config, f, indent=2)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="save-my-tokens (SMT) - Semantic code graph",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Quick Start:
-  python run.py                  # Start MCP server (auto-builds graph)
+  python run.py                  # Start MCP server (auto-builds graph & config)
   python run.py smt              # Same as above
   python run.py graph            # Build/check graph
   python run.py graph --check    # Check status

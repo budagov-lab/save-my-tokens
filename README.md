@@ -1,46 +1,47 @@
 # Save My Tokens (SMT)
 
-Give Claude smart code context instead of entire files.
+Intelligent code context for Claude instead of entire files.
 
-## Setup (5 minutes)
+## Quick Start (3 steps)
 
+### 1. Start Database (one time)
 ```bash
-# 1. Start database (one time)
 docker-compose up -d neo4j
+```
 
-# 2. Install & configure (one time)
+### 2. Initialize Project (one time)
+```bash
 python setup.py
+```
 
-# 3. Run server (every session)
+Creates:
+- `.mcp.json` — MCP server config
+- `.claude/settings.json` — Claude Code settings
+- `.claude/workspace.json` — Project config  
+- `.claude/MCP_SETUP_INSTRUCTIONS.md` — Tool guide
+
+### 3. Start Server (every session)
+```bash
 python run.py
 ```
 
-Done. `python run.py` is all you need. Claude automatically uses SMT tools.
+Then open project in Claude Code. MCP tools are available.
 
-## How It Works
-
-When you ask Claude about your code:
-
-**Without SMT:**
-- Claude reads entire file
-- Doesn't know who calls this function
-- Can't tell if changes break something
-
-**With SMT (automatic):**
-- Claude calls `get_context(symbol)`
-- Gets: definition + callers + dependencies
-- Minimal context needed
-- Understands the code instantly
+---
 
 ## The Problem
 
-Claude reads entire files to find one function. It doesn't know who calls it or what breaks if you change it.
+Claude reads entire files to understand one function. It doesn't know who calls it or what breaks if you change it.
 
 ## The Solution
 
-SMT gives exact context: function + callers + dependencies + breaking changes. Minimal token usage.
+SMT provides exact context: function + callers + dependencies + breaking changes.
 
-## Tools (10 total)
+Instead of reading files, Claude queries the code graph via MCP tools.
+
+---
+
+## MCP Tools (10 total)
 
 | Tool | Purpose |
 |------|---------|
@@ -55,27 +56,35 @@ SMT gives exact context: function + callers + dependencies + breaking changes. M
 | `schedule_tasks` | Auto-parallelize work |
 | `execute_tasks` | Run with dependency resolution |
 
-## How It Works
+---
+
+## Architecture
 
 ```
-Your Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude Code
+Source Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude
 ```
 
 Supports: Python, TypeScript, Go, Rust, Java
 
-## Why Use This
+---
 
-✨ **Minimal context** — Only what's needed  
-✨ **Safe refactoring** — Breaking change detection  
-✨ **Parallelization** — Conflict detection  
-✨ **Semantic search** — Find code by meaning  
-✨ **Git-aware** — Incremental updates  
+## Why This Works
+
+- **Minimal context** — Only what's needed, not entire files
+- **Safe refactoring** — Breaking change detection before you refactor
+- **Parallelization** — Conflict detection between tasks
+- **Semantic search** — Find code by meaning, not just name
+- **Git-aware** — Incremental updates from commits
+
+---
 
 ## Requirements
 
 - Python 3.10+
 - Docker (for Neo4j)
 - Claude Code or Claude Desktop
+
+---
 
 ## Testing
 
@@ -98,8 +107,4 @@ MIT
 
 ---
 
-**Setup:** `python setup.py` installs, builds, and configures everything.
-
-**Run:** `python run.py` starts the MCP server.
-
-**Use:** Just ask Claude about your code naturally.
+**That's it.** Just ask Claude about your code naturally.

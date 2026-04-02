@@ -68,8 +68,13 @@ fixtures/test_repos/
 # Internal planning docs
 docs/internal/
 
-# AI assistant config (CLAUDE.md should be committed)
-.claude/
+# AI assistant config (docs should be committed, generated configs should not)
+.claude/settings.json
+.claude/settings.local.json
+.claude/workspace.json
+
+# MCP config (generated at setup time)
+.mcp.json
 
 # Test artifacts
 DECISION_BRIEF.txt
