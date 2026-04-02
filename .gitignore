@@ -49,11 +49,13 @@ htmlcov/
 *.db
 *.sqlite
 
-# Neo4j
+# Neo4j (each developer builds their own graph locally)
 data/
+neo4j/
 
-# Logs
+# Logs (developer-specific)
 *.log
+logs/
 
 # Node (if testing JS/TS repos)
 node_modules/
