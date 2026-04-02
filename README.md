@@ -431,11 +431,11 @@ All components gracefully degrade if optional services unavailable.
 - **[POSITIONING.md](POSITIONING.md)** — What SMT does & why you need it
 
 **Understanding the Pipeline (Recommended):**
-- **[COMPLETE_EXPLANATION.md](COMPLETE_EXPLANATION.md)** ⭐ — End-to-end overview of how SMT works with Git (start here!)
-- **[GIT_WORKFLOW_EXPLANATION.md](GIT_WORKFLOW_EXPLANATION.md)** — Detailed technical breakdown of incremental analysis
-- **[INCREMENTAL_FLOW_DIAGRAM.txt](INCREMENTAL_FLOW_DIAGRAM.txt)** — Visual flow diagram of entire pipeline
-- **[AUDIT_REPORT.md](AUDIT_REPORT.md)** — Token efficiency audit with real numbers
-- **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** — Navigation guide for all documentation
+- **[COMPLETE_EXPLANATION.md](docs/internal/COMPLETE_EXPLANATION.md)** ⭐ — End-to-end overview of how SMT works with Git (start here!)
+- **[GIT_WORKFLOW_EXPLANATION.md](docs/internal/GIT_WORKFLOW_EXPLANATION.md)** — Detailed technical breakdown of incremental analysis
+- **[INCREMENTAL_FLOW_DIAGRAM.txt](docs/internal/INCREMENTAL_FLOW_DIAGRAM.txt)** — Visual flow diagram of entire pipeline
+- **[AUDIT_REPORT.md](docs/internal/AUDIT_REPORT.md)** — Token efficiency audit with real numbers
+- **[DOCUMENTATION_INDEX.md](docs/internal/DOCUMENTATION_INDEX.md)** — Navigation guide for all documentation
 
 **Usage:**
 - **[MCP Examples](docs/MCP_EXAMPLES.md)** — 6 real-world usage examples
