@@ -40,15 +40,18 @@ class Neo4jClient:
     def create_indexes(self) -> None:
         """Create indexes for performance optimization."""
         queries = [
-            "CREATE INDEX node_id_idx IF NOT EXISTS FOR (n) ON (n.node_id)",
-            "CREATE INDEX node_name_idx IF NOT EXISTS FOR (n) ON (n.name)",
-            "CREATE INDEX node_file_idx IF NOT EXISTS FOR (n) ON (n.file)",
-            "CREATE INDEX node_type_idx IF NOT EXISTS FOR (n) ON (n.type)",
+            "CREATE INDEX node_id_idx IF NOT EXISTS FOR (n:Node) ON (n.node_id)",
+            "CREATE INDEX node_name_idx IF NOT EXISTS FOR (n:Node) ON (n.name)",
+            "CREATE INDEX node_file_idx IF NOT EXISTS FOR (n:Node) ON (n.file)",
+            "CREATE INDEX node_type_idx IF NOT EXISTS FOR (n:Node) ON (n.type)",
         ]
         with self.driver.session() as session:
             for query in queries:
-                session.run(query)
-        logger.info("Created Neo4j indexes")
+                try:
+                    session.run(query)
+                except Exception as e:
+                    logger.debug(f"Index creation skipped: {e}")
+        logger.info("Indexes ready")
 
     def create_node(self, node: Node) -> None:
         """Create a node in the graph.
@@ -121,7 +124,8 @@ class Neo4jClient:
                 cypher = f"""
                 MATCH (source:{source_type} {{node_id: $source_id}})
                 MATCH (target:{target_type} {{node_id: $target_id}})
-                MERGE (source)-[r:{edge.type.value} $props]->(target)
+                MERGE (source)-[r:{edge.type.value}]->(target)
+                SET r += $props
                 """
                 session.run(
                     cypher,

@@ -90,6 +90,23 @@ class GraphBuilder:
 
     def _create_nodes(self) -> None:
         """Create nodes from symbols in the index."""
+        # First, create File nodes for each unique file
+        files_seen = set()
+        for symbol in self.symbol_index.get_all():
+            if symbol.file and symbol.file not in files_seen:
+                files_seen.add(symbol.file)
+                file_node_id = f"File:{symbol.file}:1:{symbol.file}"
+                file_node = Node(
+                    node_id=file_node_id,
+                    type=NodeType.FILE,
+                    name=symbol.file,
+                    file=symbol.file,
+                    line=1,
+                    column=1,
+                )
+                self.nodes.append(file_node)
+
+        # Then create nodes from symbols
         for symbol in self.symbol_index.get_all():
             # Convert Symbol to Node
             node_type = self._map_symbol_type_to_node_type(symbol.type)
@@ -133,27 +150,28 @@ class GraphBuilder:
                         (edge, NodeType.CLASS.value, self._map_symbol_type_to_node_type(parent_symbol.type).value)
                     )
 
-            # IMPORTS edge: for imports
+            # IMPORTS edge: from file to imported module
             if symbol.type == "import":
-                # symbol.name is the resolved import path
-                # Find matching module/file
-                module_name = symbol.name
-                # Try to find matching file or module symbol
-                matching_symbols = self.symbol_index.get_by_name(module_name)
-                if matching_symbols:
-                    target_symbol = matching_symbols[0]
-                    edge = Edge(
-                        source_id=symbol.node_id,
-                        target_id=target_symbol.node_id,
-                        type=EdgeType.IMPORTS,
-                    )
-                    self.edges.append(
-                        (
-                            edge,
-                            NodeType.FUNCTION.value,  # Import statement belongs to file/function
-                            self._map_symbol_type_to_node_type(target_symbol.type).value,
+                # symbol.file is the file that imports
+                # symbol.name is the imported module name
+                if symbol.file:
+                    source_file_id = f"File:{symbol.file}:1:{symbol.file}"
+                    # Try to find matching module node for the imported name
+                    matching_symbols = self.symbol_index.get_by_name(symbol.name)
+                    if matching_symbols:
+                        target_symbol = matching_symbols[0]
+                        edge = Edge(
+                            source_id=source_file_id,
+                            target_id=target_symbol.node_id,
+                            type=EdgeType.IMPORTS,
                         )
-                    )
+                        self.edges.append(
+                            (
+                                edge,
+                                NodeType.FILE.value,  # Import is from the file
+                                self._map_symbol_type_to_node_type(target_symbol.type).value,
+                            )
+                        )
 
     def _persist_to_neo4j(self) -> None:
         """Write nodes and edges to Neo4j."""
