@@ -245,6 +245,11 @@ All components gracefully degrade if optional services unavailable.
 
 ## Documentation
 
+**Getting Started:**
+- **[MCP Quick Start](docs/MCP_QUICK_START.md)** — 10-minute setup guide (START HERE!)
+- **[MCP Examples](docs/MCP_EXAMPLES.md)** — Real-world usage examples & patterns
+
+**Deep Dives:**
 - **[MCP Server Guide](docs/FEATURE4_SCHEDULING_GUIDE.md)** — MCP tools, session management, APIs
 - **[Incremental Updates Guide](docs/INCREMENTAL_UPDATES_GUIDE.md)** — Git diff parsing, delta application
 - **[Contract Extraction Guide](docs/CONTRACT_EXTRACTION_GUIDE.md)** — Function contracts, breaking changes
