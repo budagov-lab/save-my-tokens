@@ -1,6 +1,6 @@
-# 🚀 SMT MCP Server - Installation
+# 🚀 Install SMT: Code Context for AI Agents
 
-**Get started in 3 minutes. One command. Done.**
+**3 minutes to give Claude smart code understanding.**
 
 ---
 

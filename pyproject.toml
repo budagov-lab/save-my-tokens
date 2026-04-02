@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "smt-graph"
 version = "0.1.0"
-description = "Graph API Foundation for Code Analysis and Agent Context Retrieval"
+description = "Code Context for AI Agents - Smart dependency graphs & efficient code understanding"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
