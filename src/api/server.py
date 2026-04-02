@@ -79,7 +79,7 @@ def create_app(
         except Exception as e:
             logger.warning(f"Could not initialize Neo4j client: {e}. Running in demo mode.")
             neo4j_client = None
-            query_service = QueryService(symbol_index, neo4j_client, embedding_service)  # type: ignore
+            query_service = QueryService(symbol_index, neo4j_client, embedding_service)  # type: ignore[arg-type]
 
     # Health check endpoint
     @app.get("/health")

@@ -62,7 +62,7 @@ async def extract_contract(
     file_path: str,
     source_code: str,
     class_name: str | None = None,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Extract the function contract (signature, type hints, pre/postconditions)
@@ -107,7 +107,7 @@ async def compare_contracts(
     old_source: str,
     new_source: str,
     class_name: str | None = None,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Compare old and new implementations of a function and detect breaking changes.

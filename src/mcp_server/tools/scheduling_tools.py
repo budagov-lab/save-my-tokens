@@ -9,8 +9,8 @@ from src.mcp_server.services import ServiceContainer
 
 @mcp.tool()
 async def schedule_tasks(
-    tasks: list = None,  # type: ignore
-    ctx: Context = None,  # type: ignore
+    tasks: list = None,  # type: ignore[type-arg]
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Build an optimal execution plan for a set of tasks, grouping
@@ -60,9 +60,9 @@ async def schedule_tasks(
 
 @mcp.tool()
 async def execute_tasks(
-    tasks: list = None,  # type: ignore
+    tasks: list = None,  # type: ignore[type-arg]
     timeout_seconds: float = 30.0,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Schedule and execute a set of tasks, respecting dependencies and

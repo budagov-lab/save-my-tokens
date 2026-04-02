@@ -11,7 +11,7 @@ async def get_context(
     symbol: str,
     depth: int = 1,
     include_callers: bool = False,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Get minimal context for a symbol: its definition, direct dependencies,
@@ -43,7 +43,7 @@ async def get_context(
 async def get_subgraph(
     symbol: str,
     depth: int = 2,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Get the full dependency subgraph rooted at a symbol, up to `depth` hops.
@@ -71,7 +71,7 @@ async def get_subgraph(
 async def semantic_search(
     query: str,
     top_k: int = 5,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Search the symbol index for symbols semantically matching the query.
@@ -92,8 +92,8 @@ async def semantic_search(
 
 @mcp.tool()
 async def validate_conflicts(
-    tasks: list,  # type: ignore
-    ctx: Context = None,  # type: ignore
+    tasks: list,  # type: ignore[type-arg]
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Detect conflicts between a set of parallel tasks before execution.

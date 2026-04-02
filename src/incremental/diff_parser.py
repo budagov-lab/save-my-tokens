@@ -33,8 +33,10 @@ class DiffParser:
 
     # Patterns for parsing git diff headers
     # Example: diff --git a/path/to/file.py b/path/to/file.py
+    # Handles filenames with spaces by splitting on " b/" separator
+    # (which is reliable: " b/" can't appear in a filename path before the " b/" of the second path)
     DIFF_HEADER_PATTERN = re.compile(
-        r"^diff --git a/(.*) b/(.*)$", re.MULTILINE
+        r"^diff --git a/(.+?) b/(.+)$", re.MULTILINE
     )
 
     # Pattern for file status in diff: "new file mode", "deleted file mode", etc.
@@ -64,13 +66,19 @@ class DiffParser:
         for file_diff in file_diffs:
             lines = file_diff.split("\n")
 
-            # Parse the header line
-            header_match = re.match(r"\s+a/(.*)\s+b/(.*)", lines[0])
-            if not header_match:
+            # Parse the header line: " a/path/to/file b/path/to/file"
+            # Split on " b/" to handle filenames with spaces correctly
+            header_line = lines[0].strip()
+            if not header_line.startswith("a/"):
                 continue
 
-            old_path = header_match.group(1)
-            new_path = header_match.group(2)
+            # Find the " b/" separator (indicates start of new path)
+            b_separator_pos = header_line.rfind(" b/")
+            if b_separator_pos == -1:
+                continue
+
+            old_path = header_line[2:b_separator_pos]  # Skip "a/" prefix
+            new_path = header_line[b_separator_pos + 3:]  # Skip " b/" prefix
 
             # Determine file status
             status = "modified"

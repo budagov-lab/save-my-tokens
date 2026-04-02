@@ -13,6 +13,11 @@ from src.parsers.symbol_index import SymbolIndex
 class QueryService:
     """Service for querying the dependency graph."""
 
+    # Approximate tokens per character for LLM encoding
+    # Based on OpenAI tokenizer: average ~4-4.5 chars per token for English text
+    # This is a conservative estimate used when exact tokenization unavailable
+    TOKENS_PER_CHAR = 4
+
     def __init__(
         self,
         symbol_index: SymbolIndex,
@@ -79,9 +84,8 @@ class QueryService:
             # Would query for reverse CALLS relationships
             response["callers"] = []
 
-        # Estimate token count (rough heuristic: 4 chars ≈ 1 token)
-        estimated_chars = len(str(response))
-        response["token_estimate"] = estimated_chars // 4
+        # Estimate token count
+        response["token_estimate"] = self._estimate_tokens(response)
 
         logger.info(f"Got context for {symbol_name}: {response['token_estimate']} tokens")
         return response
@@ -126,8 +130,7 @@ class QueryService:
         }
 
         # Estimate token count
-        estimated_chars = len(str(response))
-        response["token_estimate"] = estimated_chars // 4
+        response["token_estimate"] = self._estimate_tokens(response)
 
         logger.info(f"Got subgraph for {symbol_name}: {len(response['nodes'])} nodes")
         return response
@@ -271,3 +274,30 @@ class QueryService:
             "parallel_feasible": parallel_feasible,
             "recommendation": "Direct overlap detected" if conflicts else "All tasks independent",
         }
+
+    def _estimate_tokens(self, data: dict) -> int:
+        """Estimate token count for a response object.
+
+        Uses a conservative heuristic: converts data to JSON string and divides
+        by TOKENS_PER_CHAR. This is approximate and suitable for budgeting.
+
+        NOTE: For exact token counts, use OpenAI's tiktoken library:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            exact_count = len(enc.encode(str(data)))
+
+        Args:
+            data: Dictionary to estimate tokens for
+
+        Returns:
+            Estimated token count (conservative lower bound)
+        """
+        import json
+
+        try:
+            json_str = json.dumps(data, default=str)
+            estimated_tokens = len(json_str) // self.TOKENS_PER_CHAR
+            return max(1, estimated_tokens)  # At least 1 token
+        except Exception as e:
+            logger.warning(f"Failed to estimate tokens: {e}. Returning conservative estimate.")
+            return 100  # Conservative fallback

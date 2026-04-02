@@ -16,7 +16,7 @@ from src.parsers.symbol_index import SymbolIndex
 try:
     from src.parsers.typescript_parser import TypeScriptParser
 except ImportError:
-    TypeScriptParser = None  # type: ignore
+    TypeScriptParser = None  # type: ignore[name-defined]
 
 
 class GraphBuilder:
@@ -33,7 +33,7 @@ class GraphBuilder:
         self.neo4j_client = neo4j_client or Neo4jClient()
         self.import_resolver = ImportResolver(str(self.base_path))
         self.python_parser = PythonParser(str(self.base_path))
-        self.typescript_parser = TypeScriptParser(str(self.base_path)) if TypeScriptParser else None  # type: ignore
+        self.typescript_parser = TypeScriptParser(str(self.base_path)) if TypeScriptParser else None  # type: ignore[operator]
         self.symbol_index: SymbolIndex = SymbolIndex()
         self.call_analyzer = CallAnalyzer(self.symbol_index)
         self.nodes: List[Node] = []

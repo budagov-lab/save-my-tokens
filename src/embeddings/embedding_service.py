@@ -14,12 +14,12 @@ from src.parsers.symbol_index import SymbolIndex
 try:
     import faiss
 except ImportError:
-    faiss = None  # type: ignore
+    faiss = None  # type: ignore[name-defined]
 
 try:
     from openai import OpenAI
 except ImportError:
-    OpenAI = None  # type: ignore
+    OpenAI = None  # type: ignore[name-defined]
 
 
 class EmbeddingService:

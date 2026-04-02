@@ -11,7 +11,7 @@ from src.parsers.symbol import Symbol
 @mcp.tool()
 async def parse_diff(
     diff_text: str,
-    ctx: Context = None,  # type: ignore
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Parse a raw git diff and return a summary of which files changed and how.
@@ -46,10 +46,10 @@ async def parse_diff(
 @mcp.tool()
 async def apply_diff(
     file: str,
-    added_symbols: list = None,  # type: ignore
-    deleted_symbol_names: list = None,  # type: ignore
-    modified_symbols: list = None,  # type: ignore
-    ctx: Context = None,  # type: ignore
+    added_symbols: list = None,  # type: ignore[type-arg]
+    deleted_symbol_names: list = None,  # type: ignore[type-arg]
+    modified_symbols: list = None,  # type: ignore[type-arg]
+    ctx: Context = None,  # type: ignore[assignment]  # FastMCP context injection
 ) -> dict:
     """
     Apply a symbol delta to the in-memory index and Neo4j graph.
