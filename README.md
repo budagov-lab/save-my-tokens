@@ -32,48 +32,44 @@ Graph API structures code as a queryable dependency graph **exposed via MCP**:
 
 **Design Goals:** Designed to support 11x more problems per conversation by reducing token overhead compared to naive full-file access.
 
-## Quick Start
+## Quick Start (3 minutes)
 
-### Prerequisites
-- Python 3.11+
-- Docker & Docker Compose (optional, for Neo4j)
-- Claude Desktop or Claude Code (to use MCP server)
+### Installation
 
-### Setup (5 minutes)
+**Windows:**
+```cmd
+install.bat
+```
+
+**macOS / Linux:**
+```bash
+bash install.sh
+```
+
+That's it! The script handles everything.
+
+### Manual Setup
+
+If the scripts don't work:
 
 ```bash
-# 1. Clone
 git clone https://github.com/budagov-lab/save-my-tokens.git
 cd save-my-tokens
-
-# 2. Virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
+python -m venv venv && source venv/bin/activate
 pip install -e .
+```
 
-# 4. (Optional) Start Neo4j for full functionality
-docker-compose up -d
+### Connect to Claude Code
 
-# 5. Run tests
-pytest tests/ -v
+See [INSTALL.md](INSTALL.md) for step-by-step configuration.
 
-# 6. Start MCP server (stdio transport)
+### Start Using
+
+```bash
 python run_mcp.py
 ```
 
-For Claude Desktop integration, configure in `claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "syt-graph": {
-      "command": "python",
-      "args": ["/path/to/save-my-tokens/run_mcp.py"]
-    }
-  }
-}
-```
+Then ask Claude Code about your code!
 
 ## Core Concept
 
@@ -246,8 +242,9 @@ All components gracefully degrade if optional services unavailable.
 ## Documentation
 
 **Getting Started:**
-- **[MCP Quick Start](docs/MCP_QUICK_START.md)** — 10-minute setup guide (START HERE!)
+- **[INSTALL.md](INSTALL.md)** — 3-minute one-click installation (START HERE!)
 - **[MCP Examples](docs/MCP_EXAMPLES.md)** — Real-world usage examples & patterns
+- **[MCP Cheatsheet](docs/MCP_CHEATSHEET.md)** — Quick reference for all 10 tools
 
 **Deep Dives:**
 - **[MCP Server Guide](docs/FEATURE4_SCHEDULING_GUIDE.md)** — MCP tools, session management, APIs
