@@ -14,13 +14,21 @@ from src.parsers.symbol_index import SymbolIndex
 class IncrementalSymbolUpdater:
     """Apply symbol changes to index and Neo4j transactionally."""
 
-    def __init__(self, symbol_index: SymbolIndex, neo4j_client: Neo4jClient):
+    def __init__(self, symbol_index: SymbolIndex, neo4j_client: Optional[Neo4jClient]):
         """Initialize the updater.
 
         Args:
             symbol_index: In-memory symbol index to update
-            neo4j_client: Neo4j client for persistent updates
+            neo4j_client: Neo4j client for persistent updates (required)
+
+        Raises:
+            RuntimeError: If neo4j_client is None (incremental updates require Neo4j)
         """
+        if neo4j_client is None:
+            raise RuntimeError(
+                "IncrementalSymbolUpdater requires a Neo4j client. "
+                "Incremental updates cannot work in offline mode."
+            )
         self.index = symbol_index
         self.neo4j = neo4j_client
         self.delta_history: List[SymbolDelta] = []

@@ -22,7 +22,7 @@ class ServiceContainer:
 
     symbol_index: SymbolIndex
     query_service: QueryService
-    updater: IncrementalSymbolUpdater
+    updater: Optional[IncrementalSymbolUpdater]
     diff_parser: DiffParser
     scheduler: TaskScheduler
     execution_engine: ParallelExecutionEngine
@@ -67,10 +67,13 @@ def build_services() -> ServiceContainer:
     query_service = QueryService(symbol_index, neo4j_client, embedding_service)
     logger.debug("Created QueryService")
 
-    # IncrementalSymbolUpdater - handles None neo4j_client gracefully
-    # (apply_delta raises RuntimeError if neo4j_client is None)
-    updater = IncrementalSymbolUpdater(symbol_index, neo4j_client)  # type: ignore
-    logger.debug("Created IncrementalSymbolUpdater")
+    # IncrementalSymbolUpdater requires Neo4j (raises RuntimeError if None)
+    if neo4j_client is None:
+        updater = None  # type: ignore[assignment]
+        logger.warning("Neo4j unavailable: incremental updates disabled")
+    else:
+        updater = IncrementalSymbolUpdater(symbol_index, neo4j_client)
+        logger.debug("Created IncrementalSymbolUpdater")
 
     diff_parser = DiffParser()
     logger.debug("Created DiffParser")

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # Neo4j Configuration
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "password"
+    NEO4J_PASSWORD: str = "password"  # WARNING: Change in production (use env var: NEO4J_PASSWORD)
 
     # OpenAI Configuration
     OPENAI_API_KEY: str = ""
@@ -48,6 +48,14 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         """Initialize settings and ensure directories exist."""
         super().__init__(**kwargs)
+
+        # Security warning: check for default password
+        if self.NEO4J_PASSWORD == "password" and self.DEBUG:
+            print(
+                "⚠️  WARNING: Using default Neo4j password 'password'. "
+                "Set NEO4J_PASSWORD environment variable for production."
+            )
+
         # Create necessary directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOGS_DIR.mkdir(parents=True, exist_ok=True)
