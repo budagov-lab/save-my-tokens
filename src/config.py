@@ -21,9 +21,8 @@ class Settings(BaseSettings):
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "password"  # WARNING: Change in production (use env var: NEO4J_PASSWORD)
 
-    # OpenAI Configuration
-    OPENAI_API_KEY: str = ""
-    OPENAI_MODEL_EMBEDDINGS: str = "text-embedding-3-small"
+    # Embedding Configuration
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
 
     # API Configuration
     API_HOST: str = "0.0.0.0"
@@ -54,13 +53,6 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         """Initialize settings and ensure directories exist."""
         super().__init__(**kwargs)
-
-        # Security warning: check for default password
-        if self.NEO4J_PASSWORD == "password" and self.DEBUG:
-            print(
-                "[WARNING] Using default Neo4j password 'password'. "
-                "Set NEO4J_PASSWORD environment variable for production."
-            )
 
         # Create necessary directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -42,20 +42,19 @@ class TestEmbeddingServiceInit:
         assert service.embedding_cache == {}
         assert service.id_to_symbol == {}
 
-    def test_init_with_openai_api_key(self, symbol_index, temp_cache_dir):
-        """Test initialization with OpenAI API key."""
-        with patch('src.embeddings.embedding_service.settings.OPENAI_API_KEY', 'test-key'):
-            with patch('src.embeddings.embedding_service.OpenAI') as mock_openai:
-                service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
-
-                mock_openai.assert_called_once_with(api_key='test-key')
-
-    def test_init_without_openai_api_key(self, symbol_index, temp_cache_dir):
-        """Test initialization without OpenAI API key."""
-        with patch('src.embeddings.embedding_service.settings.OPENAI_API_KEY', None):
+    def test_init_with_embedding_model(self, symbol_index, temp_cache_dir):
+        """Test initialization with embedding model."""
+        with patch('src.embeddings.embedding_service.SentenceTransformer') as mock_model:
             service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
 
-            assert service.openai_client is None
+            mock_model.assert_called_once_with('all-MiniLM-L6-v2')
+
+    def test_init_without_embedding_model(self, symbol_index, temp_cache_dir):
+        """Test initialization without embedding model."""
+        with patch('src.embeddings.embedding_service.SentenceTransformer', None):
+            service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
+
+            assert service.embedding_model is None
 
 
 class TestEmbedSymbol:
@@ -78,31 +77,31 @@ class TestEmbedSymbol:
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
         symbol = symbol_index.get_by_name("func_a")[0]
 
-        mock_embedding = [0.1] * 1536
-        with patch.object(service, 'openai_client') as mock_client:
-            mock_client.embeddings.create.return_value.data = [MagicMock(embedding=mock_embedding)]
+        mock_embedding = np.array([[0.1] * 384], dtype=np.float32)
+        with patch.object(service, 'embedding_model') as mock_model:
+            mock_model.encode.return_value = mock_embedding
 
             result = service.embed_symbol(symbol)
 
-            assert result == mock_embedding
+            assert result == mock_embedding[0].tolist()
 
-    def test_embed_symbol_no_openai_client(self, symbol_index, temp_cache_dir):
-        """Test embedding fails without OpenAI client."""
+    def test_embed_symbol_no_embedding_model(self, symbol_index, temp_cache_dir):
+        """Test embedding fails without embedding model."""
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
-        service.openai_client = None
+        service.embedding_model = None
         symbol = symbol_index.get_by_name("func_a")[0]
 
         result = service.embed_symbol(symbol)
 
         assert result is None
 
-    def test_embed_symbol_openai_error(self, symbol_index, temp_cache_dir):
-        """Test embedding fails on OpenAI error."""
+    def test_embed_symbol_model_error(self, symbol_index, temp_cache_dir):
+        """Test embedding fails on model error."""
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
         symbol = symbol_index.get_by_name("func_a")[0]
 
-        with patch.object(service, 'openai_client') as mock_client:
-            mock_client.embeddings.create.side_effect = Exception("API Error")
+        with patch.object(service, 'embedding_model') as mock_model:
+            mock_model.encode.side_effect = Exception("Model Error")
 
             result = service.embed_symbol(symbol)
 
@@ -130,7 +129,7 @@ class TestBuildIndex:
         """Test successful index building."""
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
 
-        mock_embedding = np.array([0.1] * 1536, dtype=np.float32)
+        mock_embedding = np.array([0.1] * 384, dtype=np.float32)
 
         with patch.object(service, 'embed_symbol', return_value=mock_embedding.tolist()):
             with patch('src.embeddings.embedding_service.faiss') as mock_faiss:
@@ -139,7 +138,7 @@ class TestBuildIndex:
 
                 service.build_index()
 
-                mock_faiss.IndexFlatL2.assert_called_once_with(1536)
+                mock_faiss.IndexFlatL2.assert_called_once_with(384)
 
 
 class TestSearch:
@@ -154,24 +153,24 @@ class TestSearch:
 
         assert result == []
 
-    def test_search_no_openai_fallback(self, symbol_index, temp_cache_dir):
-        """Test search falls back without OpenAI client."""
+    def test_search_no_embedding_model_fallback(self, symbol_index, temp_cache_dir):
+        """Test search falls back without embedding model."""
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
         service.index = MagicMock()
-        service.openai_client = None
+        service.embedding_model = None
 
         with patch.object(service, '_fallback_search', return_value=[]) as mock_fallback:
             result = service.search("test query")
 
             mock_fallback.assert_called_once_with("test query", 5)
 
-    def test_search_openai_error_fallback(self, symbol_index, temp_cache_dir):
-        """Test search falls back on OpenAI error."""
+    def test_search_model_error_fallback(self, symbol_index, temp_cache_dir):
+        """Test search falls back on model error."""
         service = EmbeddingService(symbol_index, cache_dir=temp_cache_dir)
         service.index = MagicMock()
 
-        with patch.object(service, 'openai_client') as mock_client:
-            mock_client.embeddings.create.side_effect = Exception("API Error")
+        with patch.object(service, 'embedding_model') as mock_model:
+            mock_model.encode.side_effect = Exception("Model Error")
 
             with patch.object(service, '_fallback_search', return_value=[]) as mock_fallback:
                 result = service.search("test query")
@@ -186,10 +185,10 @@ class TestSearch:
         symbol = symbol_index.get_by_name("func_a")[0]
         service.id_to_symbol = {0: symbol}
 
-        with patch.object(service, 'openai_client') as mock_client:
-            mock_client.embeddings.create.return_value.data = [
-                MagicMock(embedding=[0.1] * 1536)
-            ]
+        with patch.object(service, 'embedding_model') as mock_model:
+            mock_model.encode.return_value = np.array(
+                [[0.1] * 384], dtype=np.float32
+            )
 
             service.index.search.return_value = (
                 np.array([[0.5]]),
@@ -358,5 +357,5 @@ class TestGetStats:
 
         assert stats["cached_embeddings"] == 2
         assert stats["indexed_symbols"] == 3
-        assert stats["embedding_model"] == "text-embedding-3-small"
-        assert stats["embedding_dim"] == 1536
+        assert stats["embedding_model"] == "all-MiniLM-L6-v2"
+        assert stats["embedding_dim"] == 384

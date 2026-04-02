@@ -2,7 +2,9 @@
   "mcpServers": {
     "smt": {
       "command": "python",
-      "args": ["C:\\Users\\LENOVO\\Desktop\\Projects\\SYT\\run.py"]
+      "args": [
+        "C:\\Users\\LENOVO\\Desktop\\Projects\\save-my-tokens\\run.py"
+      ]
     }
   }
 }

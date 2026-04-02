@@ -1,4 +1,4 @@
-"""Embedding service for semantic search using FAISS and OpenAI."""
+"""Embedding service for semantic search using FAISS and SentenceTransformers."""
 
 import json
 from pathlib import Path
@@ -17,17 +17,16 @@ except ImportError:
     faiss = None  # type: ignore[name-defined]
 
 try:
-    from openai import OpenAI
+    from sentence_transformers import SentenceTransformer
 except ImportError:
-    OpenAI = None  # type: ignore[name-defined]
+    SentenceTransformer = None  # type: ignore[name-defined]
 
 
 class EmbeddingService:
-    """Service for generating and searching embeddings."""
+    """Service for generating and searching embeddings using SentenceTransformers."""
 
-    # OpenAI embedding model
-    EMBEDDING_MODEL = "text-embedding-3-small"
-    EMBEDDING_DIM = 1536  # text-embedding-3-small produces 1536-dim vectors
+    # SentenceTransformers model - all-MiniLM-L6-v2 is small (22MB) and fast
+    EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 produces 384-dim vectors
 
     def __init__(self, symbol_index: SymbolIndex, cache_dir: Optional[Path] = None):
         """Initialize embedding service.
@@ -40,12 +39,16 @@ class EmbeddingService:
         self.cache_dir = cache_dir or settings.DATA_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize OpenAI client if available
-        self.openai_client = None
-        if OpenAI and settings.OPENAI_API_KEY:
-            self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # Initialize SentenceTransformer model
+        self.embedding_model = None
+        if SentenceTransformer:
+            try:
+                self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL)
+                logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
+            except Exception as e:
+                logger.error(f"Failed to load embedding model {settings.EMBEDDING_MODEL}: {e}")
         else:
-            logger.warning("OpenAI API key not configured. Embeddings will not be generated.")
+            logger.warning("SentenceTransformers not installed. Install with: pip install sentence-transformers")
 
         # Initialize FAISS index
         self.index: Optional[faiss.IndexFlatL2] = None
@@ -72,16 +75,13 @@ class EmbeddingService:
         # Generate embedding text
         text = self._prepare_text_for_embedding(symbol)
 
-        # Call OpenAI API
-        if not self.openai_client:
-            logger.warning(f"Cannot embed {symbol.name}: OpenAI client not configured")
+        if not self.embedding_model:
+            logger.warning(f"Cannot embed {symbol.name}: embedding model not loaded")
             return None
 
         try:
-            response = self.openai_client.embeddings.create(
-                input=text, model=self.EMBEDDING_MODEL
-            )
-            embedding = response.data[0].embedding
+            embeddings = self.embedding_model.encode([text], convert_to_numpy=True)
+            embedding = embeddings[0].tolist()
             self.embedding_cache[cache_key] = embedding
             logger.debug(f"Embedded {symbol.name}: {len(embedding)} dims")
             return embedding
@@ -145,16 +145,14 @@ class EmbeddingService:
             logger.warning("FAISS index not built. Cannot search.")
             return []
 
-        if not self.openai_client:
-            logger.warning("OpenAI client not configured. Using fallback search.")
+        if not self.embedding_model:
+            logger.warning("Embedding model not loaded. Using fallback search.")
             return self._fallback_search(query, top_k)
 
         # Embed query
         try:
-            response = self.openai_client.embeddings.create(
-                input=query, model=self.EMBEDDING_MODEL
-            )
-            query_embedding = response.data[0].embedding
+            query_embeddings = self.embedding_model.encode([query], convert_to_numpy=True)
+            query_embedding = query_embeddings[0].tolist()
         except Exception as e:
             logger.error(f"Failed to embed query: {e}")
             return self._fallback_search(query, top_k)
@@ -263,6 +261,6 @@ class EmbeddingService:
         return {
             "cached_embeddings": len(self.embedding_cache),
             "indexed_symbols": len(self.id_to_symbol),
-            "embedding_model": self.EMBEDDING_MODEL,
+            "embedding_model": settings.EMBEDDING_MODEL,
             "embedding_dim": self.EMBEDDING_DIM,
         }
