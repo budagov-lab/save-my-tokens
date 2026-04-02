@@ -62,29 +62,36 @@ pip install -e .
 
 See [INSTALL_PATHS.md](INSTALL_PATHS.md) for detailed comparison and when to use each path.
 
-### ⚙️ Configure Claude Code
+### ⚙️ Quick Start
 
-After installation, add 5 lines to `~/.claude/settings.json`:
+After installation, one command starts everything:
+
+```bash
+python run.py
+```
+
+This automatically:
+- ✓ Initializes Neo4j graph (one-time)
+- ✓ Builds/updates code index
+- ✓ Starts MCP server
+- ✓ Connects to Claude Desktop
+
+### Using with Claude Desktop
+
+Add to `.mcp.json`:
 
 ```json
 {
-  "mcpServers": [{
-    "name": "smt-graph",
-    "command": "python",
-    "args": ["/path/to/smt-graph/run_mcp.py"]
-  }]
+  "mcpServers": {
+    "smt": {
+      "command": "python",
+      "args": ["/path/to/smt-graph/run.py"]
+    }
+  }
 }
 ```
 
-Restart Claude Code. Done!
-
-### Start Using
-
-```bash
-python run_mcp.py
-```
-
-Then ask Claude Code about your code!
+Then in Claude Desktop, SMT tools are available instantly.
 
 ## How It Actually Works: The Incremental Analysis Pipeline
 

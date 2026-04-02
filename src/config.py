@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     APP_NAME: str = "smt-graph"
     APP_VERSION: str = "0.1.0"
 
+    # Project Isolation
+    # Neo4j database name for this project (each project gets its own database)
+    # Format: project_name (lowercase, alphanumeric + underscore)
+    NEO4J_DATABASE: str = "smt_default"
+
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent
     DATA_DIR: Path = PROJECT_ROOT / "data"

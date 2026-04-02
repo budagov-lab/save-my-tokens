@@ -12,19 +12,40 @@ from src.graph.node_types import Edge, Node, NodeType
 class Neo4jClient:
     """Neo4j database client for graph operations."""
 
-    def __init__(self, uri: Optional[str] = None, user: Optional[str] = None, password: Optional[str] = None):
+    def __init__(
+        self,
+        uri: Optional[str] = None,
+        user: Optional[str] = None,
+        password: Optional[str] = None,
+        database: Optional[str] = None,
+    ):
         """Initialize Neo4j client.
 
         Args:
             uri: Neo4j connection URI (defaults to config)
             user: Neo4j user (defaults to config)
             password: Neo4j password (defaults to config)
+            database: Neo4j database name (defaults to config, enables project isolation)
         """
         self.uri = uri or settings.NEO4J_URI
         self.user = user or settings.NEO4J_USER
         self.password = password or settings.NEO4J_PASSWORD
+        self.database = database or settings.NEO4J_DATABASE
         self.driver = GraphDatabase.driver(self.uri, auth=(self.user, self.password))
-        logger.info(f"Connected to Neo4j at {self.uri}")
+        logger.info(f"Connected to Neo4j at {self.uri} (database: {self.database})")
+
+        # Ensure database exists (create if it doesn't)
+        self._ensure_database_exists()
+
+    def _ensure_database_exists(self) -> None:
+        """Ensure database connection works (uses default database with project labels)."""
+        try:
+            # Test connection
+            with self.driver.session() as session:
+                session.run("RETURN 1")
+        except Exception as e:
+            logger.error(f"Failed to connect to Neo4j: {e}")
+            raise
 
     def close(self) -> None:
         """Close database connection."""

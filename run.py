@@ -16,8 +16,12 @@ from pathlib import Path
 
 from loguru import logger
 
+from src.projects import set_project_database, get_database_name
 from src.graph.neo4j_client import Neo4jClient
 from src.graph.graph_builder import GraphBuilder
+
+# Set up project isolation at startup
+set_project_database()
 
 
 def init_graph(clear: bool = False) -> bool:
@@ -53,11 +57,13 @@ def check_graph() -> bool:
     try:
         client = Neo4jClient()
         stats = client.get_stats()
+        db_name = get_database_name()
 
         print("\n" + "=" * 60)
         print("SAVE-MY-TOKENS GRAPH STATUS")
         print("=" * 60)
-        print(f"\nNodes: {stats['node_count']}")
+        print(f"\nDatabase: {db_name}")
+        print(f"Nodes: {stats['node_count']}")
         print(f"Edges: {stats['edge_count']}")
 
         # Node breakdown
