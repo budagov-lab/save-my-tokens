@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "save-my-tokens"
+name = "smt-graph"
 version = "0.1.0"
 description = "Graph API Foundation for Code Analysis and Agent Context Retrieval"
 readme = "README.md"

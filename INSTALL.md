@@ -1,4 +1,4 @@
-# 🚀 SYT MCP Server - Installation
+# 🚀 SMT MCP Server - Installation
 
 **Get started in 3 minutes. One command. Done.**
 
@@ -29,8 +29,8 @@ That's it! The script will:
 
 ```bash
 # 1. Clone
-git clone https://github.com/budagov-lab/save-my-tokens.git
-cd save-my-tokens
+git clone https://github.com/budagov-lab/smt-graph.git
+cd smt-graph
 
 # 2. Virtual environment
 python -m venv venv
@@ -74,15 +74,15 @@ docker-compose up -d
 {
   "mcpServers": [
     {
-      "name": "syt-graph",
+      "name": "smt-graph",
       "command": "python",
-      "args": ["/path/to/save-my-tokens/run_mcp.py"]
+      "args": ["/path/to/smt-graph/run_mcp.py"]
     }
   ]
 }
 ```
 
-Replace `/path/to/save-my-tokens` with your actual path.
+Replace `/path/to/smt-graph` with your actual path.
 
 ### Step 3: Restart Claude Code
 

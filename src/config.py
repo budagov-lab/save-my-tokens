@@ -1,4 +1,4 @@
-"""Configuration for save-my-tokens application."""
+"""Configuration for smt-graph application."""
 
 from pathlib import Path
 
@@ -32,11 +32,11 @@ class Settings(BaseSettings):
 
     # Logging Configuration
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "logs/save-my-tokens.log"
+    LOG_FILE: str = "logs/smt-graph.log"
 
     # Application Configuration
     DEBUG: bool = True
-    APP_NAME: str = "save-my-tokens"
+    APP_NAME: str = "smt-graph"
     APP_VERSION: str = "0.1.0"
 
     # Project paths

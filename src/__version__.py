@@ -1,4 +1,4 @@
-"""Version information for save-my-tokens."""
+"""Version information for smt-graph."""
 
 __version__ = "0.1.0"
 __author__ = "Claude Code"

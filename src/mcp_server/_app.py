@@ -31,4 +31,4 @@ async def lifespan(app: FastMCP) -> AsyncIterator[ServiceContainer]:
 
 
 # FastMCP instance - tools will be registered on this instance
-mcp = FastMCP(name="syt-graph", lifespan=lifespan)
+mcp = FastMCP(name="smt-graph", lifespan=lifespan)

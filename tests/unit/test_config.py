@@ -8,7 +8,7 @@ from src.config import settings
 def test_settings_exist():
     """Test that settings are properly initialized."""
     assert settings is not None
-    assert settings.APP_NAME == "save-my-tokens"
+    assert settings.APP_NAME == "smt-graph"
     assert settings.NEO4J_USER == "neo4j"
 
 

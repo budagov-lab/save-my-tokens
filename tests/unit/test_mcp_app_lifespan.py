@@ -80,7 +80,7 @@ class TestMCPInstance:
         """Test MCP instance has correct name."""
         from src.mcp_server._app import mcp
 
-        assert mcp.name == "syt-graph"
+        assert mcp.name == "smt-graph"
 
     def test_mcp_is_fastmcp_instance(self):
         """Test MCP instance is FastMCP type."""

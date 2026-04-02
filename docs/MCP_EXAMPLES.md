@@ -1,4 +1,4 @@
-# SYT MCP Server - Practical Examples
+# SMT MCP Server - Practical Examples
 
 **Real-world examples of how to use the graph API with Claude.**
 

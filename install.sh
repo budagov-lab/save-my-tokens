@@ -1,10 +1,10 @@
 #!/bin/bash
-# SYT MCP Server - One-Click Setup
+# SMT MCP Server - One-Click Setup
 # Usage: bash install.sh
 
 set -e
 
-echo "🚀 Installing SYT MCP Server..."
+echo "🚀 Installing SMT MCP Server..."
 
 # Check Python version
 python_version=$(python3 --version 2>&1 | awk '{print $2}')
@@ -44,7 +44,7 @@ python -m pytest tests/unit/ -q --tb=no 2>/dev/null && echo "✓ All tests passe
 
 echo ""
 echo "════════════════════════════════════════════"
-echo "✨ SYT MCP Server installed successfully!"
+echo "✨ SMT MCP Server installed successfully!"
 echo "════════════════════════════════════════════"
 echo ""
 echo "Next steps:"
@@ -55,7 +55,7 @@ echo "  2. Configure Claude Code:"
 echo "     Add to .claude/settings.json:"
 echo "       \"mcpServers\": ["
 echo "         {"
-echo "           \"name\": \"syt-graph\","
+echo "           \"name\": \"smt-graph\","
 echo "           \"command\": \"python\","
 echo "           \"args\": [\"$(pwd)/run_mcp.py\"]"
 echo "         }"

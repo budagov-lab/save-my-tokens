@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""MCP server entry point for syt-graph.
+"""MCP server entry point for smt-graph.
 
 Usage (stdio transport for agent subprocess):
     python run_mcp.py
@@ -7,9 +7,9 @@ Usage (stdio transport for agent subprocess):
 Claude Desktop config (claude_desktop_config.json):
     {
       "mcpServers": {
-        "syt-graph": {
+        "smt-graph": {
           "command": "python",
-          "args": ["/path/to/SYT/run_mcp.py"]
+          "args": ["/path/to/SMT/run_mcp.py"]
         }
       }
     }

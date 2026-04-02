@@ -1,6 +1,6 @@
 # MCP Server - Cheatsheet
 
-**Quick reference for using SYT's 10 MCP tools.**
+**Quick reference for using SMT's 10 MCP tools.**
 
 ---
 
@@ -8,8 +8,8 @@
 
 ### Install
 ```bash
-git clone https://github.com/budagov-lab/save-my-tokens.git
-cd save-my-tokens
+git clone https://github.com/budagov-lab/smt-graph.git
+cd smt-graph
 python -m venv venv && source venv/bin/activate
 pip install -e .
 ```
@@ -24,9 +24,9 @@ Edit `~/Library/Application\ Support/Claude/claude_desktop_config.json` (macOS):
 ```json
 {
   "mcpServers": {
-    "syt-graph": {
+    "smt-graph": {
       "command": "python",
-      "args": ["/absolute/path/to/save-my-tokens/run_mcp.py"]
+      "args": ["/absolute/path/to/smt-graph/run_mcp.py"]
     }
   }
 }

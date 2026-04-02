@@ -1,4 +1,4 @@
-# SYT MCP Server - Quick Start Guide
+# SMT MCP Server - Quick Start Guide
 
 **Get your code analysis graph working with Claude in 10 minutes.**
 
@@ -25,8 +25,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/budagov-lab/save-my-tokens.git
-cd save-my-tokens
+git clone https://github.com/budagov-lab/smt-graph.git
+cd smt-graph
 
 # Create virtual environment
 python -m venv venv
@@ -80,7 +80,7 @@ This starts the MCP server on stdio (pipes data to Claude).
 ### Option B: Via Claude Code CLI
 
 ```bash
-claude code --mcp /path/to/save-my-tokens/run_mcp.py
+claude code --mcp /path/to/smt-graph/run_mcp.py
 ```
 
 ---
@@ -104,16 +104,16 @@ claude code --mcp /path/to/save-my-tokens/run_mcp.py
 ~/.config/Claude/claude_desktop_config.json
 ```
 
-### 2. Add SYT Server
+### 2. Add SMT Server
 
 Edit `claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
-    "syt-graph": {
+    "smt-graph": {
       "command": "python",
-      "args": ["/absolute/path/to/save-my-tokens/run_mcp.py"]
+      "args": ["/absolute/path/to/smt-graph/run_mcp.py"]
     }
   }
 }
@@ -123,7 +123,7 @@ Edit `claude_desktop_config.json`:
 
 ### 3. Restart Claude Desktop
 
-Close and reopen Claude Desktop. You should see "syt-graph" in the model selector bottom-right.
+Close and reopen Claude Desktop. You should see "smt-graph" in the model selector bottom-right.
 
 ### 4. Test Connection
 
@@ -142,7 +142,7 @@ python run_mcp.py
 ### 2. Use with Claude Code
 
 ```bash
-claude code --mcp syt-graph
+claude code --mcp smt-graph
 ```
 
 Or configure it in `.claude/settings.json`:
@@ -151,9 +151,9 @@ Or configure it in `.claude/settings.json`:
 {
   "mcpServers": [
     {
-      "name": "syt-graph",
+      "name": "smt-graph",
       "command": "python",
-      "args": ["/path/to/save-my-tokens/run_mcp.py"]
+      "args": ["/path/to/smt-graph/run_mcp.py"]
     }
   ]
 }
@@ -283,7 +283,7 @@ Result: Per-task results, success rate, timing
 
 **Check:**
 1. Is Python 3.11+ installed? `python --version`
-2. Is path absolute (not relative)? ✅ `/home/user/save-my-tokens` ❌ `~/save-my-tokens`
+2. Is path absolute (not relative)? ✅ `/home/user/smt-graph` ❌ `~/smt-graph`
 3. Did you restart Claude Desktop after editing config?
 4. Does the file exist? `ls /path/to/run_mcp.py`
 

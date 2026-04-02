@@ -1,4 +1,4 @@
-# Save My Tokens (SYT)
+# Save My Tokens (SMT)
 
 **A Graph API + MCP server that transforms source code into structured dependency graphs, enabling LLM agents to work efficiently on codebases.**
 
@@ -53,8 +53,8 @@ That's it! The script handles everything.
 If the scripts don't work:
 
 ```bash
-git clone https://github.com/budagov-lab/save-my-tokens.git
-cd save-my-tokens
+git clone https://github.com/budagov-lab/smt-graph.git
+cd smt-graph
 python -m venv venv && source venv/bin/activate
 pip install -e .
 ```
@@ -355,11 +355,11 @@ For questions, issues, or discussions, open a GitHub issue or check [Troubleshoo
 
 ---
 
-## How Agents Use SYT
+## How Agents Use SMT
 
 ```python
 # Example: Agent modifies authentication system
-assistant = await load_claude_with_mcp_tools("syt-graph")
+assistant = await load_claude_with_mcp_tools("smt-graph")
 
 # 1. Discover what to modify
 context = assistant.call_tool("get_context", symbol="validate_token", depth=2)

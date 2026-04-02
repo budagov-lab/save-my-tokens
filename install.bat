@@ -1,10 +1,10 @@
 @echo off
-REM SYT MCP Server - One-Click Setup
+REM SMT MCP Server - One-Click Setup
 REM Usage: install.bat
 
 setlocal enabledelayedexpansion
 
-echo 🚀 Installing SYT MCP Server...
+echo 🚀 Installing SMT MCP Server...
 echo.
 
 REM Check Python version
@@ -62,7 +62,7 @@ if errorlevel 0 (
 
 echo.
 echo ════════════════════════════════════════════
-echo ✨ SYT MCP Server installed successfully!
+echo ✨ SMT MCP Server installed successfully!
 echo ════════════════════════════════════════════
 echo.
 echo Next steps:
@@ -73,7 +73,7 @@ echo   2. Configure Claude Code:
 echo      Add to .claude/settings.json:
 echo        "mcpServers": [
 echo          {
-echo            "name": "syt-graph",
+echo            "name": "smt-graph",
 echo            "command": "python",
 echo            "args": ["%cd%\run_mcp.py"]
 echo          }
