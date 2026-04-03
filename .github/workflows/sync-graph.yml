@@ -21,6 +21,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
         ports:
+          - 7474:7474
           - 7687:7687
 
     steps:
@@ -47,13 +48,13 @@ jobs:
 
       - name: Check graph status
         run: |
-          python build_graph.py --check
+          python run.py graph --check
         continue-on-error: true
 
       - name: Build/rebuild graph from source
         run: |
           echo "Building graph from source code..."
-          python build_graph.py --clear
+          python run.py graph --clear
 
       - name: Verify graph integrity
         run: |
