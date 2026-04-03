@@ -1311,58 +1311,57 @@ def create_mcp_json(project_root: Path) -> bool:
 
 def ask_sync_method() -> str:
     """Ask user which graph sync method they prefer."""
-    print("\n" + "="*70)
-    print("GRAPH SYNC METHOD")
-    print("="*70)
-    print("\nHow should the graph stay in sync with code changes?")
-    print("(Read all 4 options below before choosing)\n")
+    import sys
 
-    print("1. GIT HOOKS (Local - Recommended for solo development)")
-    print("   - Auto-syncs after each git commit")
-    print("   - Instant feedback (30 seconds)")
-    print("   - Works offline")
-    print("   - Setup: bash install-git-hooks.sh")
-    print("")
+    print("\n" + "="*70, flush=True)
+    print("GRAPH SYNC METHOD", flush=True)
+    print("="*70, flush=True)
+    print("", flush=True)
+    print("How should the graph stay in sync with code changes?", flush=True)
+    print("", flush=True)
+    print("OPTION 1: GIT HOOKS (Local - Recommended for solo development)", flush=True)
+    print("  • Auto-syncs after each git commit", flush=True)
+    print("  • Instant feedback (30 seconds)", flush=True)
+    print("  • Works offline", flush=True)
+    print("", flush=True)
+    print("OPTION 2: GITHUB ACTIONS (Remote - Recommended for teams)", flush=True)
+    print("  • Auto-syncs on every git push", flush=True)
+    print("  • Free CI/CD runners", flush=True)
+    print("  • Team has synced graph on main", flush=True)
+    print("", flush=True)
+    print("OPTION 3: MANUAL ONLY (No automation)", flush=True)
+    print("  • Use: graph_diff_rebuild() when needed", flush=True)
+    print("  • Control when graph syncs", flush=True)
+    print("  • Minimal overhead", flush=True)
+    print("", flush=True)
+    print("OPTION 4: BOTH (Git hooks + GitHub Actions)", flush=True)
+    print("  • Local instant sync + team sync", flush=True)
+    print("  • Maximum coverage", flush=True)
+    print("  • Slight CI/CD overhead", flush=True)
+    print("", flush=True)
+    print("="*70, flush=True)
 
-    print("2. GITHUB ACTIONS (Remote - Recommended for teams)")
-    print("   - Auto-syncs on every git push")
-    print("   - Free CI/CD runners")
-    print("   - Team has synced graph on main")
-    print("   - Already configured (.github/workflows/sync-graph.yml)")
-    print("")
-
-    print("3. MANUAL ONLY (No automation)")
-    print("   - Use: graph_diff_rebuild() when needed")
-    print("   - Control when graph syncs")
-    print("   - Minimal overhead")
-    print("")
-
-    print("4. BOTH (Git hooks + GitHub Actions)")
-    print("   - Local instant sync + team sync")
-    print("   - Maximum coverage")
-    print("   - Slight CI/CD overhead")
-    print("")
-    print("-" * 70)
+    sys.stdout.flush()
 
     while True:
-        choice = input("\nChoose 1-4 (default: 1): ").strip()
+        choice = input("\nEnter your choice (1-4, default is 1): ").strip()
         if not choice:
-            print("Using: Git Hooks (local auto-sync on commit)")
+            print(">> Using: Git Hooks (local auto-sync on commit)", flush=True)
             return "git-hooks"
         if choice == "1":
-            print("Using: Git Hooks (local auto-sync on commit)")
+            print(">> Using: Git Hooks (local auto-sync on commit)", flush=True)
             return "git-hooks"
         elif choice == "2":
-            print("Using: GitHub Actions (remote auto-sync on push)")
+            print(">> Using: GitHub Actions (remote auto-sync on push)", flush=True)
             return "github-actions"
         elif choice == "3":
-            print("Using: Manual sync (use graph_diff_rebuild() when needed)")
+            print(">> Using: Manual sync (use graph_diff_rebuild() when needed)", flush=True)
             return "manual"
         elif choice == "4":
-            print("Using: Both Git Hooks + GitHub Actions (dual sync)")
+            print(">> Using: Both Git Hooks + GitHub Actions (dual sync)", flush=True)
             return "both"
         else:
-            print("Invalid choice. Please enter 1, 2, 3, or 4.")
+            print("Invalid choice. Please enter 1, 2, 3, or 4.", flush=True)
 
 
 def setup_sync_method(method: str, project_root: Path) -> bool:
