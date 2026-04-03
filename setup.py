@@ -107,7 +107,7 @@ def create_claude_settings(project_root: Path) -> bool:
         }
 
         settings_file = claude_dir / 'settings.json'
-        with open(settings_file, 'w') as f:
+        with open(settings_file, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2)
         print("[OK]")
         return True
@@ -1252,7 +1252,7 @@ Never answer with assumptions. Always use tools.
 """
 
         guide_file = skill_dir / 'SKILL.md'
-        with open(guide_file, 'w') as f:
+        with open(guide_file, 'w', encoding='utf-8') as f:
             f.write(guide)
 
         if guide_file.exists():
@@ -1283,7 +1283,7 @@ def create_claude_workspace(project_root: Path) -> bool:
         }
 
         workspace_file = claude_dir / 'workspace.json'
-        with open(workspace_file, 'w') as f:
+        with open(workspace_file, 'w', encoding='utf-8') as f:
             json.dump(workspace_config, f, indent=2)
         print("[OK]")
         return True
@@ -1305,7 +1305,7 @@ def create_mcp_json(project_root: Path) -> bool:
             }
         }
         mcp_file = project_root / '.mcp.json'
-        with open(mcp_file, 'w') as f:
+        with open(mcp_file, 'w', encoding='utf-8') as f:
             json.dump(mcp_config, f, indent=2)
 
         if mcp_file.exists():
