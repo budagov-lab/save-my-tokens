@@ -7,6 +7,7 @@ def main() -> None:
     # Deferred import to avoid shadowing the mcp package
     from src.mcp_server.tools import (  # noqa: F401
         contract_tools,
+        database_tools,
         graph_tools,
         incremental_tools,
         scheduling_tools,
