@@ -3,16 +3,22 @@
 save-my-tokens (SMT) - Main entry point.
 
 Usage:
-    python run.py                    # Start MCP server
+    python run.py                    # Start MCP server (auto-starts docker + graph)
     python run.py smt                # Alias for MCP server
     python run.py graph              # Build/check graph
     python run.py graph --clear      # Clear and rebuild graph
     python run.py graph --check      # Check graph status
+    python run.py docker             # Manage Docker (up/down/status)
+    python run.py docker up          # Start Neo4j container
+    python run.py docker down        # Stop Neo4j container
+    python run.py docker status      # Check Neo4j status
 """
 
 import sys
 import json
 import argparse
+import subprocess
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -27,6 +33,80 @@ set_project_database()
 
 # Initialize collaboration manager
 collab = GraphCollaborationManager()
+
+
+def is_neo4j_running() -> bool:
+    """Check if Neo4j is running and accessible."""
+    try:
+        import requests
+        response = requests.get('http://localhost:7474', timeout=2)
+        return response.status_code < 500
+    except:
+        return False
+
+
+def start_docker() -> bool:
+    """Start Neo4j container with docker-compose."""
+    logger.info("Starting Neo4j container...")
+    try:
+        result = subprocess.run(
+            ['docker-compose', 'up', '-d', 'neo4j'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            logger.error(f"Docker-compose failed: {result.stderr}")
+            return False
+
+        # Wait for Neo4j to be ready
+        logger.info("Waiting for Neo4j to be ready...")
+        for attempt in range(30):
+            if is_neo4j_running():
+                logger.info("Neo4j is ready!")
+                return True
+            time.sleep(1)
+
+        logger.error("Neo4j failed to start in time")
+        return False
+
+    except Exception as e:
+        logger.error(f"Failed to start docker: {e}")
+        return False
+
+
+def stop_docker() -> bool:
+    """Stop Neo4j container with docker-compose."""
+    logger.info("Stopping Neo4j container...")
+    try:
+        result = subprocess.run(
+            ['docker-compose', 'down'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode == 0:
+            logger.info("Neo4j stopped")
+            return True
+        else:
+            logger.error(f"Failed to stop docker: {result.stderr}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Failed to stop docker: {e}")
+        return False
+
+
+def docker_status() -> bool:
+    """Check Neo4j container status."""
+    if is_neo4j_running():
+        logger.info("Neo4j is running and accessible")
+        return True
+    else:
+        logger.warning("Neo4j is not running")
+        return False
 
 
 def init_graph(clear: bool = False) -> bool:
@@ -118,10 +198,18 @@ def check_graph() -> bool:
 
 
 def start_mcp() -> bool:
-    """Start MCP server."""
+    """Start MCP server (auto-starts docker if needed)."""
     try:
         from src.mcp_server.entrypoint import main as mcp_main
         project_root = Path(__file__).parent
+
+        # Ensure Neo4j is running
+        logger.info("Checking Neo4j status...")
+        if not is_neo4j_running():
+            logger.info("Neo4j not running, starting container...")
+            if not start_docker():
+                logger.error("Failed to start Neo4j container")
+                return False
 
         logger.info("Setting up Claude Code configuration...")
         ensure_claude_config(project_root)
@@ -247,17 +335,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Quick Start:
-  python run.py                  # Start MCP server (auto-builds graph & config)
+  python run.py                  # Start MCP server (auto-starts docker + builds graph)
   python run.py smt              # Same as above
   python run.py graph            # Build/check graph
   python run.py graph --check    # Check status
   python run.py graph --clear    # Clear and rebuild
+  python run.py docker           # Check Neo4j status
+  python run.py docker up        # Start Neo4j container
+  python run.py docker down      # Stop Neo4j container
 
 For Claude Desktop integration:
-  1. Ensure Docker Neo4j is running: docker-compose up -d neo4j
-  2. Start SMT: python run.py
-  3. In Claude Desktop, configure .mcp.json to use stdio transport
-  4. SMT MCP tools are now available
+  1. Run: python run.py
+     (automatically starts Neo4j, builds graph, starts MCP server)
+  2. In Claude Desktop, configure .mcp.json to use stdio transport
+  3. SMT MCP tools are now available
         """
     )
 
@@ -268,6 +359,11 @@ For Claude Desktop integration:
     graph_parser.add_argument('--check', action='store_true', help='Check status')
     graph_parser.add_argument('--clear', action='store_true', help='Clear and rebuild')
 
+    # docker subcommand
+    docker_parser = subparsers.add_parser('docker', help='Manage Neo4j Docker container')
+    docker_parser.add_argument('action', nargs='?', choices=['up', 'down', 'status'], default='status',
+                              help='Docker action (default: status)')
+
     args = parser.parse_args()
 
     # Handle commands
@@ -276,8 +372,15 @@ For Claude Desktop integration:
             success = check_graph()
         else:
             success = init_graph(clear=args.clear)
+    elif args.command == 'docker':
+        if args.action == 'up':
+            success = start_docker()
+        elif args.action == 'down':
+            success = stop_docker()
+        else:
+            success = docker_status()
     elif args.command == 'smt' or not args.command:
-        # Default: start MCP
+        # Default: start MCP (auto-starts docker)
         success = start_mcp()
     else:
         parser.print_help()
