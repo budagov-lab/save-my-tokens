@@ -1314,41 +1314,52 @@ def ask_sync_method() -> str:
     print("\n" + "="*70)
     print("GRAPH SYNC METHOD")
     print("="*70)
-    print("\nHow should the graph stay in sync with code changes?\n")
+    print("\nHow should the graph stay in sync with code changes?")
+    print("(Read all 4 options below before choosing)\n")
 
     print("1. GIT HOOKS (Local - Recommended for solo development)")
     print("   - Auto-syncs after each git commit")
     print("   - Instant feedback (30 seconds)")
     print("   - Works offline")
-    print("   - Setup: bash install-git-hooks.sh\n")
+    print("   - Setup: bash install-git-hooks.sh")
+    print("")
 
     print("2. GITHUB ACTIONS (Remote - Recommended for teams)")
     print("   - Auto-syncs on every git push")
     print("   - Free CI/CD runners")
     print("   - Team has synced graph on main")
-    print("   - Already configured (.github/workflows/sync-graph.yml)\n")
+    print("   - Already configured (.github/workflows/sync-graph.yml)")
+    print("")
 
     print("3. MANUAL ONLY (No automation)")
-    print("   - Use: graph_diff_rebuild()")
+    print("   - Use: graph_diff_rebuild() when needed")
     print("   - Control when graph syncs")
-    print("   - Minimal overhead\n")
+    print("   - Minimal overhead")
+    print("")
 
     print("4. BOTH (Git hooks + GitHub Actions)")
     print("   - Local instant sync + team sync")
     print("   - Maximum coverage")
-    print("   - Slight CI/CD overhead\n")
+    print("   - Slight CI/CD overhead")
+    print("")
+    print("-" * 70)
 
     while True:
-        choice = input("Choose 1-4 (default: 1 - Git Hooks): ").strip()
+        choice = input("\nChoose 1-4 (default: 1): ").strip()
         if not choice:
+            print("Using: Git Hooks (local auto-sync on commit)")
             return "git-hooks"
         if choice == "1":
+            print("Using: Git Hooks (local auto-sync on commit)")
             return "git-hooks"
         elif choice == "2":
+            print("Using: GitHub Actions (remote auto-sync on push)")
             return "github-actions"
         elif choice == "3":
+            print("Using: Manual sync (use graph_diff_rebuild() when needed)")
             return "manual"
         elif choice == "4":
+            print("Using: Both Git Hooks + GitHub Actions (dual sync)")
             return "both"
         else:
             print("Invalid choice. Please enter 1, 2, 3, or 4.")
