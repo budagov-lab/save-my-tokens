@@ -1,5 +1,6 @@
 """Unit tests for graph builder and related components."""
 
+import tempfile
 from pathlib import Path
 from typing import List
 from unittest.mock import MagicMock, patch
