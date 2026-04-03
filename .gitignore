@@ -69,6 +69,7 @@ fixtures/test_repos/
 docs/internal/
 
 # AI assistant config (docs should be committed, generated configs should not)
+CLAUDE.md
 .claude/settings.json
 .claude/settings.local.json
 .claude/workspace.json
