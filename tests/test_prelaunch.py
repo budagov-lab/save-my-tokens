@@ -63,13 +63,13 @@ class TestSyntax:
         assert result.returncode == 0, f"Syntax error in run.py: {result.stderr.decode()}"
 
     def test_setup_py_syntax(self):
-        """Test setup.py has valid Python syntax."""
+        """Test configure.py has valid Python syntax."""
         result = subprocess.run(
-            [sys.executable, "-m", "py_compile", "setup.py"],
+            [sys.executable, "-m", "py_compile", "configure.py"],
             capture_output=True,
             timeout=5
         )
-        assert result.returncode == 0, f"Syntax error in setup.py: {result.stderr.decode()}"
+        assert result.returncode == 0, f"Syntax error in configure.py: {result.stderr.decode()}"
 
 
 class TestConfigFiles:

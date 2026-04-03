@@ -1,40 +1,6 @@
 # Save My Tokens (SMT)
 
-Intelligent code context for Claude instead of entire files.
-
-## Quick Start (4 steps)
-
-### 0. Verify Environment (optional but recommended)
-```bash
-python prelaunch_check.py
-```
-
-Checks Python version, dependencies, and project structure.
-
-### 1. Start Database (one time)
-```bash
-docker-compose up -d neo4j
-```
-
-### 2. Initialize Project (one time)
-```bash
-python setup.py
-```
-
-Creates:
-- `.mcp.json` — MCP server config
-- `.claude/settings.json` — Claude Code settings
-- `.claude/workspace.json` — Project config  
-- `.claude/skills/mcp-guide/SKILL.md` — Tool guide
-
-### 3. Start Server (every session)
-```bash
-python run.py
-```
-
-Then open project in Claude Code. MCP tools are available.
-
----
+Intelligent code context for Claude via CLI — instead of reading entire files.
 
 ## The Problem
 
@@ -42,65 +8,76 @@ Claude reads entire files to understand one function. It doesn't know who calls 
 
 ## The Solution
 
-SMT provides exact context: function + callers + dependencies + breaking changes.
+SMT builds a semantic graph of your codebase and exposes it through a `smt` CLI. Claude queries the graph via Bash instead of reading files.
 
-Instead of reading files, Claude queries the code graph via MCP tools.
+```bash
+smt context GraphBuilder          # definition + deps + callers
+smt search "embedding logic"      # semantic search
+smt callers build_graph           # who calls this
+smt diff HEAD~1..HEAD             # sync after commit
+```
 
 ---
 
-## MCP Tools (15 total)
+## Quick Start
 
-### Graph Query Tools
-| Tool | Purpose |
-|------|---------|
-| `get_context` | Function + callers + dependencies |
-| `get_subgraph` | Full dependency tree |
-| `semantic_search` | Find code by meaning |
-| `validate_conflicts` | Check if changes conflict |
+### 1. Install
 
-### Code Analysis Tools
-| Tool | Purpose |
-|------|---------|
-| `extract_contract` | Parse function signatures & types |
-| `compare_contracts` | Detect breaking changes |
+```bash
+git clone https://github.com/your-org/save-my-tokens
+cd save-my-tokens
+pip install -e .
+```
 
-### Graph Management Tools
-| Tool | Purpose |
-|------|---------|
-| `graph_init` | Initialize empty graph |
-| `graph_rebuild` | Full rebuild from source |
-| `graph_stats` | Get graph status (nodes, edges) |
-| `graph_validate` | Check graph integrity |
-| `graph_diff_rebuild` | Incremental update from git commits |
+### 2. Start Neo4j
 
-### Task Orchestration Tools
-| Tool | Purpose |
-|------|---------|
-| `parse_diff` | Analyze git changes |
-| `apply_diff` | Update graph from commits |
-| `schedule_tasks` | Auto-parallelize work |
-| `execute_tasks` | Run with dependency resolution |
+```bash
+smt docker up
+```
+
+### 3. Build the graph
+
+```bash
+smt build
+```
+
+### 4. Query
+
+```bash
+smt status
+smt search "your query"
+smt context MyFunction
+```
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `smt build` | Build graph from `src/` |
+| `smt build --check` | Show graph stats |
+| `smt build --clear` | Wipe and rebuild |
+| `smt context <symbol>` | Symbol definition + deps + callers |
+| `smt context <symbol> --depth 2` | Deeper dependency tree |
+| `smt callers <symbol>` | Who calls this symbol |
+| `smt search <query>` | Semantic search |
+| `smt diff [range]` | Sync graph after commits (default: `HEAD~1..HEAD`) |
+| `smt docker up/down/status` | Manage Neo4j container |
+| `smt status` | Graph health check |
+| `smt setup [--dir <path>]` | Configure a project |
 
 ---
 
 ## Architecture
 
 ```
-Source Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude
+Source Code → Parse (Tree-sitter) → Graph (Neo4j) → CLI → Claude (Bash)
+                                         ↕
+                               Embeddings (FAISS + SentenceTransformers)
 ```
 
-**Supported languages:** Python, TypeScript  
-*(Go, Rust, Java parser support planned for future versions)*
-
----
-
-## Why This Works
-
-- **Minimal context** — Only what's needed, not entire files
-- **Safe refactoring** — Breaking change detection before you refactor
-- **Parallelization** — Conflict detection between tasks
-- **Semantic search** — Find code by meaning, not just name
-- **Git-aware** — Incremental updates from commits
+**Supported languages:** Python, TypeScript
 
 ---
 
@@ -108,7 +85,6 @@ Source Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude
 
 - Python 3.10+
 - Docker (for Neo4j)
-- Claude Code or Claude Desktop
 
 ---
 
@@ -118,19 +94,6 @@ Source Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude
 pytest tests/ -v
 ```
 
-## Contributing
-
-```bash
-git checkout -b feat/your-feature
-# Make changes
-pytest tests/ -v
-git push
-```
-
 ## License
 
 MIT
-
----
-
-**That's it.** Just ask Claude about your code naturally.

@@ -2,7 +2,7 @@
 """
 Pre-launch validation for save-my-tokens.
 
-Run this before setup.py or run.py to verify the environment is ready.
+Run this before configure.py or run.py to verify the environment is ready.
 No dependencies required - uses only Python standard library.
 
 Usage:
@@ -61,7 +61,7 @@ def check_python_version():
 def check_file_syntax():
     """Check Python files have valid syntax."""
     print_header("File Syntax")
-    files_to_check = ["run.py", "setup.py"]
+    files_to_check = ["run.py", "configure.py"]
     all_valid = True
 
     for file in files_to_check:
@@ -264,13 +264,13 @@ def main():
     if passed == total:
         print(f"{Colors.GREEN}{Colors.BOLD}[OK] Ready for setup!{Colors.RESET}")
         print("Next steps:")
-        print("  1. python setup.py")
+        print("  1. python configure.py")
         print("  2. python run.py")
         print("")
         return 0
     else:
         print(f"{Colors.YELLOW}{Colors.BOLD}[WARN] Some checks failed or skipped{Colors.RESET}")
-        print("You can still run setup.py, but some features may not work.")
+        print("You can still run configure.py, but some features may not work.")
         print("")
         return 1
 
