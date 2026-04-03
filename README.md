@@ -2,7 +2,14 @@
 
 Intelligent code context for Claude instead of entire files.
 
-## Quick Start (3 steps)
+## Quick Start (4 steps)
+
+### 0. Verify Environment (optional but recommended)
+```bash
+python prelaunch_check.py
+```
+
+Checks Python version, dependencies, and project structure.
 
 ### 1. Start Database (one time)
 ```bash
@@ -18,7 +25,7 @@ Creates:
 - `.mcp.json` — MCP server config
 - `.claude/settings.json` — Claude Code settings
 - `.claude/workspace.json` — Project config  
-- `.claude/MCP_SETUP_INSTRUCTIONS.md` — Tool guide
+- `.claude/skills/mcp-guide/SKILL.md` — Tool guide
 
 ### 3. Start Server (every session)
 ```bash
