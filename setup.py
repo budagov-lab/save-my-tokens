@@ -74,18 +74,6 @@ def create_claude_settings(project_root: Path) -> bool:
                             }
                         ]
                     }
-                ],
-                "SessionStart": [
-                    {
-                        "matcher": "SessionStart",
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "echo '{\"systemMessage\": \"📊 Graph API Project (Phase 1 MVP) - MCP tools available. Use get_context(), semantic_search(), validate_conflicts() for code analysis.\"}'",
-                                "statusMessage": "Loading project context"
-                            }
-                        ]
-                    }
                 ]
             },
             "respectGitignore": True,
