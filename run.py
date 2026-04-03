@@ -19,7 +19,7 @@ import json
 import argparse
 import subprocess
 import time
-import requests
+import urllib.request
 from pathlib import Path
 
 from loguru import logger
@@ -39,9 +39,9 @@ collab = GraphCollaborationManager()
 def is_neo4j_running() -> bool:
     """Check if Neo4j is running and accessible."""
     try:
-        response = requests.get('http://localhost:7474', timeout=2)
-        return response.status_code == 200
-    except (requests.RequestException, requests.Timeout):
+        urllib.request.urlopen('http://localhost:7474', timeout=2)
+        return True
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
         return False
 
 
