@@ -74,7 +74,6 @@ def main():
 class TestGraphBuilderOnRealRepo:
     """Test graph building on real Python repository."""
 
-    @pytest.mark.skip(reason="Requires Neo4j instance")
     def test_build_graph_from_python_repo(self, temp_python_repo: Path) -> None:
         """Test building graph from a Python repository.
 
