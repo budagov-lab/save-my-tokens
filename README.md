@@ -43,14 +43,32 @@ Instead of reading files, Claude queries the code graph via MCP tools.
 
 ## MCP Tools (10 total)
 
+### Graph Query Tools
 | Tool | Purpose |
 |------|---------|
 | `get_context` | Function + callers + dependencies |
 | `get_subgraph` | Full dependency tree |
 | `semantic_search` | Find code by meaning |
 | `validate_conflicts` | Check if changes conflict |
-| `extract_contract` | Parse signatures & types |
+
+### Code Analysis Tools
+| Tool | Purpose |
+|------|---------|
+| `extract_contract` | Parse function signatures & types |
 | `compare_contracts` | Detect breaking changes |
+
+### Graph Management Tools
+| Tool | Purpose |
+|------|---------|
+| `graph_init` | Initialize empty graph |
+| `graph_rebuild` | Full rebuild from source |
+| `graph_stats` | Get graph status (nodes, edges) |
+| `graph_validate` | Check graph integrity |
+| `graph_diff_rebuild` | Incremental update from git commits |
+
+### Task Orchestration Tools
+| Tool | Purpose |
+|------|---------|
 | `parse_diff` | Analyze git changes |
 | `apply_diff` | Update graph from commits |
 | `schedule_tasks` | Auto-parallelize work |
