@@ -45,9 +45,23 @@ def is_neo4j_running() -> bool:
         return False
 
 
+def is_docker_installed() -> bool:
+    """Check if docker-compose is installed."""
+    try:
+        subprocess.run(['docker-compose', '--version'], capture_output=True, timeout=2)
+        return True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def start_docker() -> bool:
     """Start Neo4j container with docker-compose."""
     logger.info("Starting Neo4j container...")
+
+    if not is_docker_installed():
+        logger.error("Docker not installed. Install from https://www.docker.com")
+        return False
+
     try:
         result = subprocess.run(
             ['docker-compose', 'up', '-d', 'neo4j'],
@@ -60,13 +74,15 @@ def start_docker() -> bool:
             logger.error(f"Docker-compose failed: {result.stderr}")
             return False
 
-        # Wait for Neo4j to be ready
+        # Wait for Neo4j to be ready with exponential backoff
         logger.info("Waiting for Neo4j to be ready...")
+        backoff = 0.5
         for attempt in range(30):
             if is_neo4j_running():
                 logger.info("Neo4j is ready!")
                 return True
-            time.sleep(1)
+            time.sleep(min(backoff, 5))
+            backoff *= 1.5
 
         logger.error("Neo4j failed to start in time")
         return False
