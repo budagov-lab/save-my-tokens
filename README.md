@@ -41,7 +41,7 @@ Instead of reading files, Claude queries the code graph via MCP tools.
 
 ---
 
-## MCP Tools (10 total)
+## MCP Tools (15 total)
 
 ### Graph Query Tools
 | Tool | Purpose |
@@ -82,7 +82,8 @@ Instead of reading files, Claude queries the code graph via MCP tools.
 Source Code → Parse (Tree-sitter) → Index (Neo4j) → Query (MCP) → Claude
 ```
 
-Supports: Python, TypeScript, Go, Rust, Java
+**Supported languages:** Python, TypeScript  
+*(Go, Rust, Java parser support planned for future versions)*
 
 ---
 
