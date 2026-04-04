@@ -1,6 +1,7 @@
 """Embedding service for semantic search using FAISS and SentenceTransformers."""
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -47,6 +48,13 @@ class EmbeddingService:
                 logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
             except Exception as e:
                 logger.error(f"Failed to load embedding model {settings.EMBEDDING_MODEL}: {e}")
+                # Surface error to CLI user (not just logger)
+                print(
+                    f"\n[smt] Warning: Embedding model failed to load ({type(e).__name__}): {e}\n"
+                    f"      Semantic search will be unavailable.\n"
+                    f"      Fix: pip install torch --index-url https://download.pytorch.org/whl/cpu\n",
+                    file=sys.stderr,
+                )
         else:
             logger.warning("SentenceTransformers not installed. Install with: pip install sentence-transformers")
 

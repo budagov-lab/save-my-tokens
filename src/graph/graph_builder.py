@@ -124,6 +124,9 @@ class GraphBuilder:
 
     def _create_edges(self) -> None:
         """Create edges from symbol relationships."""
+        # File cache for CALLS edge generation: file_path -> (source_bytes, tree)
+        file_cache: Dict[str, Tuple[bytes, any]] = {}  # type: ignore[type-arg]
+
         for symbol in self.symbol_index.get_all():
             # DEFINES edge: parent file contains this symbol
             if symbol.file:
@@ -173,6 +176,53 @@ class GraphBuilder:
                             )
                         )
 
+            # CALLS edges: extract function calls using CallAnalyzer
+            if symbol.type == "function" and symbol.file:
+                file_path = symbol.file
+                ext = Path(file_path).suffix.lower()
+
+                # Determine which parser to use
+                parser_obj = None
+                if ext == ".py":
+                    parser_obj = self.python_parser
+                elif ext in (".ts", ".tsx", ".js", ".jsx"):
+                    parser_obj = self.typescript_parser
+                else:
+                    continue
+
+                # Skip if parser not available
+                if parser_obj is None:
+                    continue
+
+                try:
+                    # Re-parse file (cached per file)
+                    if file_path not in file_cache:
+                        with open(file_path, "rb") as f:
+                            source_bytes = f.read()
+                        tree = parser_obj.parser.parse(source_bytes)
+                        file_cache[file_path] = (source_bytes, tree)
+
+                    source_bytes, tree = file_cache[file_path]
+
+                    # Find the function node matching this symbol's line (convert 1-indexed to 0-indexed)
+                    func_node = self._find_node_at_line(tree.root_node, symbol.line - 1, ext)
+                    if func_node is None:
+                        continue
+
+                    # Extract calls
+                    if ext == ".py":
+                        callee_ids = self.call_analyzer.extract_calls_python(func_node, source_bytes, file_path)
+                    else:
+                        callee_ids = self.call_analyzer.extract_calls_typescript(func_node, source_bytes, file_path)
+
+                    # Create CALLS edges
+                    for callee_id in callee_ids:
+                        edge = Edge(source_id=symbol.node_id, target_id=callee_id, type=EdgeType.CALLS)
+                        self.edges.append((edge, NodeType.FUNCTION.value, NodeType.FUNCTION.value))
+
+                except (OSError, Exception) as e:  # noqa: BLE001
+                    logger.debug(f"Failed to extract calls from {file_path}: {e}")
+
     def _persist_to_neo4j(self) -> None:
         """Write nodes and edges to Neo4j."""
         # Create indexes
@@ -185,6 +235,35 @@ class GraphBuilder:
         # Create all edges
         if self.edges:
             self.neo4j_client.create_edges_batch(self.edges)
+
+    def _find_node_at_line(self, node: any, target_line: int, file_ext: str) -> Optional[any]:  # type: ignore[name-defined]
+        """Find a function/method definition node at a specific line (0-indexed).
+
+        Args:
+            node: Current tree-sitter node to search
+            target_line: 0-indexed line number to find
+            file_ext: File extension (.py, .ts, etc) to determine node types to search for
+
+        Returns:
+            Tree-sitter node for the function at that line, or None if not found
+        """
+        # Determine the node type names based on file extension
+        if file_ext == ".py":
+            func_types = ("function_definition",)
+        else:  # TypeScript/JavaScript
+            func_types = ("function_declaration", "arrow_function", "method_definition")
+
+        # Check if current node is a function definition at the target line
+        if node.type in func_types and node.start_point[0] == target_line:
+            return node
+
+        # Recursively search children
+        for child in node.children:
+            result = self._find_node_at_line(child, target_line, file_ext)
+            if result:
+                return result
+
+        return None
 
     @staticmethod
     def _map_symbol_type_to_node_type(symbol_type: str) -> NodeType:

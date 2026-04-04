@@ -177,16 +177,33 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
 # context
 # ---------------------------------------------------------------------------
 
-def cmd_context(symbol: str, depth: int = 1, callers: bool = False) -> int:
+def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter: str | None = None) -> int:
     settings, Neo4jClient, *_ = _get_services()
 
     try:
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
         with client.driver.session() as session:
-            # Find the symbol
-            node = session.run(
-                "MATCH (n {name: $name}) RETURN n LIMIT 1", name=symbol
-            ).single()
+            # Find the symbol, prioritizing by type (Function > Class > other)
+            # and optionally filtering by file
+            if file_filter:
+                query = """
+                    MATCH (n {name: $name})
+                    WHERE n.file CONTAINS $file
+                    RETURN n
+                    LIMIT 1
+                """
+                node = session.run(query, name=symbol, file=file_filter).single()
+            else:
+                query = """
+                    MATCH (n {name: $name})
+                    RETURN n,
+                           CASE WHEN n:Function THEN 0
+                                WHEN n:Class THEN 1
+                                ELSE 2 END as priority
+                    ORDER BY priority
+                    LIMIT 1
+                """
+                node = session.run(query, name=symbol).single()
 
             if not node:
                 print(f"Symbol '{symbol}' not found in graph.")
@@ -275,7 +292,11 @@ def cmd_search(query: str, top_k: int = 5) -> int:
         results = svc.search(query, top_k=top_k)
 
         if not results:
-            print(f"No results for '{query}'")
+            # Check if embeddings are available (index exists means embeddings worked)
+            if not svc.index:
+                print(f"No results for '{query}' (embeddings unavailable — see warning above)")
+            else:
+                print(f"No results for '{query}'")
             return 0
 
         print(f"\nSearch: {query!r}  (top {len(results)})\n")
@@ -486,6 +507,7 @@ commands:
     p_ctx.add_argument('symbol')
     p_ctx.add_argument('--depth', type=int, default=1)
     p_ctx.add_argument('--callers', action='store_true')
+    p_ctx.add_argument('--file', default=None, help='Filter by file path (substring match)')
 
     # search
     p_search = sub.add_parser('search', help='Semantic search')
@@ -516,7 +538,7 @@ commands:
     if args.command == 'build':
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
     elif args.command == 'context':
-        return cmd_context(args.symbol, depth=args.depth, callers=args.callers)
+        return cmd_context(args.symbol, depth=args.depth, callers=args.callers, file_filter=args.file)
     elif args.command == 'search':
         return cmd_search(args.query, top_k=args.top)
     elif args.command == 'callers':
