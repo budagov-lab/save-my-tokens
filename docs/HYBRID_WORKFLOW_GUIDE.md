@@ -2,6 +2,24 @@
 
 When analyzing codebases with save-my-tokens (SMT), you don't have to choose between traditional file reading and graph-based queries. **Combine both approaches** for optimal efficiency and depth.
 
+## ⚠️ IMPORTANT: Query Optimization
+
+**Token costs can vary 10x** depending on how you query SMT:
+
+- ❌ Naive approach: 185k tokens per analysis (semantic searches, deep traversals)
+- ✅ Optimized approach: 20k tokens per analysis (targeted queries, shallow traversals)
+
+**READ THIS FIRST**: [SMT Query Optimization Guide](SMT_QUERY_OPTIMIZATION.md)
+
+Key rules:
+1. Use `smt context <symbol>` for known names (2k tokens, not 10k)
+2. Use `smt callers <symbol>` for relationships (2k tokens)
+3. Avoid semantic search unless you don't know the symbol name
+4. Stop after 2 levels of traversal
+5. Use Read/Grep for implementation details instead of SMT
+
+**Expected cost with optimization: ~20k tokens per analysis** (not 50-70k)
+
 ---
 
 ## Quick Comparison
@@ -10,7 +28,10 @@ When analyzing codebases with save-my-tokens (SMT), you don't have to choose bet
 |----------|----------|------|------|-------|
 | **SMT Only** | Architecture, call graphs | 18 min | 53k tokens | Functions |
 | **Traditional Only** | Code details, security | 3.6 min | 70k tokens | Implementation |
-| **Hybrid** | Full understanding | 23 min | 73k tokens | Complete ⭐ |
+| **Hybrid (optimized)** | Full understanding | 4-5 min | ~20k tokens | Complete ⭐ |
+| **Hybrid (naive)** | Full understanding | 20+ min | 185k tokens | Complete (wasteful) |
+
+⚠️ **Important**: Token costs vary 10x depending on query strategy. See [SMT Query Optimization Guide](SMT_QUERY_OPTIMIZATION.md) for details.
 
 ---
 
@@ -252,26 +273,37 @@ Read: each file that calls X
 
 ## Token Budget Strategy
 
-### If you have 100k tokens:
-1. **Phase 1** (SMT): 5 min, 10k tokens
-2. **Phase 2** (SMT): 5 min, 15k tokens
-3. **Phase 3** (Read): 10 min, 30k tokens
-4. **Reserve**: 45k tokens for follow-ups
+⚠️ **Critical**: Query strategy determines costs. See [SMT Query Optimization](SMT_QUERY_OPTIMIZATION.md) to avoid wasting 10x tokens.
 
-**Result**: Deep understanding of 2-3 features
+### Optimized Hybrid (20-25k tokens):
+1. **Phase 1** (SMT): 6k tokens - architecture overview
+   - Use targeted `smt context` queries only (2k each)
+   - Avoid semantic search for known symbols
+2. **Phase 2** (SMT): 8k tokens - call graphs
+   - Use `smt callers` for relationships (2k each)
+   - Stop after 2 levels of traversal
+3. **Phase 3** (Read): 6k tokens - code verification
+   - Targeted file reads (not full files)
+   - Grep pattern verification only
+
+**Result**: Full understanding of 3-5 features with optimized queries
+
+### If you have 100k tokens:
+1. **Hybrid analysis** (20k): Architecture + call graphs + code details
+2. **Follow-up analyses** (4x 20k = 80k): Analyze 4 different features deeply
+
+**Result**: Expert-level understanding of entire codebase
 
 ### If you have 50k tokens:
-1. **Phase 1** (SMT): 3 min, 8k tokens
-2. **Phase 2** (SMT): 2 min, 12k tokens
-3. **Skip Phase 3**, use remaining for clarifications: 30k tokens
+1. **Hybrid analysis** (20k): One complete feature analysis
+2. **Additional context** (30k): Deep-dive into 1-2 related areas
 
-**Result**: Architectural understanding of 3-4 features
+**Result**: Very deep understanding of 1-2 features
 
 ### If you have 20k tokens:
-1. **Phase 1** (SMT): 3 min, 8k tokens
-2. **Follow-ups**: 12k tokens
+1. **Single optimized hybrid** (20k): One complete feature analysis
 
-**Result**: Overview of 2-3 features (no deep dives)
+**Result**: Full understanding of 1 feature with no follow-ups
 
 ---
 
