@@ -24,7 +24,7 @@ smt diff HEAD~1..HEAD             # sync after commit
 ### 1. Install
 
 ```bash
-git clone https://github.com/your-org/save-my-tokens
+git clone https://github.com/budagov-lab/save-my-tokens
 cd save-my-tokens
 pip install -e .
 ```

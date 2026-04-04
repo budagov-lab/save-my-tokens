@@ -32,7 +32,7 @@ if sys.platform == 'win32':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-SMT_DIR = Path(__file__).parent.resolve()
+SMT_DIR = Path(__file__).parent.parent.resolve()
 
 
 def _get_services():
@@ -43,8 +43,8 @@ def _get_services():
     from src.graph.graph_builder import GraphBuilder
     from src.parsers.symbol_index import SymbolIndex
     from src.embeddings.embedding_service import EmbeddingService
-    from src.incremental.updater import GraphUpdater
-    return settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, GraphUpdater
+    from src.incremental.updater import IncrementalSymbolUpdater
+    return settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, IncrementalSymbolUpdater
 
 
 # ---------------------------------------------------------------------------
@@ -126,22 +126,37 @@ def cmd_status() -> int:
 # build
 # ---------------------------------------------------------------------------
 
-def cmd_build(check: bool = False, clear: bool = False) -> int:
+def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None = None) -> int:
     settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, _ = _get_services()
 
     if check:
         return cmd_status()
 
-    src_dir = SMT_DIR / 'src'
+    # Determine target directory
+    if target_dir:
+        target_path = Path(target_dir).resolve()
+    else:
+        # Use current directory, or fall back to SMT_DIR if cwd is SMT directory
+        cwd = Path.cwd()
+        if cwd == SMT_DIR or cwd.parent == SMT_DIR:
+            target_path = SMT_DIR
+        else:
+            target_path = cwd
+
+    # Find src directory
+    src_dir = target_path / 'src'
+    if not src_dir.exists():
+        print(f"ERROR: No 'src/' directory found in {target_path}")
+        print(f"       Make sure you're in a project with a src/ subdirectory")
+        return 1
+
     print(f"{'Rebuilding' if clear else 'Building'} graph from {src_dir} ...")
 
     try:
-        builder = GraphBuilder(
-            neo4j_uri=settings.NEO4J_URI,
-            neo4j_user=settings.NEO4J_USER,
-            neo4j_password=settings.NEO4J_PASSWORD,
-        )
-        builder.build(str(src_dir), clear_first=clear)
+        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        builder = GraphBuilder(str(src_dir), neo4j_client=client)
+        builder.build(clear_first=clear)
+        client.close()
         print("Done.")
         return cmd_status()
     except Exception as e:
@@ -268,10 +283,10 @@ def cmd_search(query: str, top_k: int = 5) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_diff(commit_range: str = 'HEAD~1..HEAD') -> int:
-    settings, _, _, _, _, GraphUpdater = _get_services()
+    settings, _, _, _, _, IncrementalSymbolUpdater = _get_services()
 
     try:
-        updater = GraphUpdater(
+        updater = IncrementalSymbolUpdater(
             neo4j_uri=settings.NEO4J_URI,
             neo4j_user=settings.NEO4J_USER,
             neo4j_password=settings.NEO4J_PASSWORD,
@@ -295,18 +310,24 @@ def cmd_setup(target_dir: Path) -> int:
 
     print(f"Configuring SMT for: {target_dir}")
 
-    # .claude/settings.json — permissions + env, no MCP hooks
+    # ------------------------------------------------------------------
+    # 1. .claude/settings.json
+    # ------------------------------------------------------------------
     settings_file = claude_dir / 'settings.json'
     existing = {}
     if settings_file.exists():
         with open(settings_file, 'r', encoding='utf-8') as f:
             existing = json.load(f)
 
-    existing.setdefault('permissions', {
-        'defaultMode': 'auto',
-        'allow': ['Read', 'Edit(**)', 'Write(**)', 'Bash'],
-        'deny': ['Bash(rm -rf:*)', 'Bash(git reset --hard:*)', 'Bash(git push --force:*)'],
-    })
+    existing['$schema'] = 'https://json.schemastore.org/claude-code-settings.json'
+    existing.setdefault('permissions', {})
+    existing['permissions']['defaultMode'] = 'auto'
+    existing['permissions']['allow'] = ['Read', 'Edit(**)', 'Write(**)', 'Bash']
+    existing['permissions'].setdefault('deny', [
+        'Bash(rm -rf:*)',
+        'Bash(git reset --hard:*)',
+        'Bash(git push --force:*)',
+    ])
     existing.setdefault('env', {})
     existing['env']['SMT_DIR'] = str(SMT_DIR)
     existing['env']['SMT_PROJECT'] = target_dir.name
@@ -316,17 +337,103 @@ def cmd_setup(target_dir: Path) -> int:
         json.dump(existing, f, indent=2)
     print("  .claude/settings.json  [OK]")
 
-    # Copy TOOLS.md
-    src_tools = SMT_DIR / '.claude' / 'TOOLS.md'
-    if src_tools.exists():
-        import shutil
-        shutil.copy2(src_tools, claude_dir / 'TOOLS.md')
-        print("  .claude/TOOLS.md       [OK]")
+    # ------------------------------------------------------------------
+    # 2. .claude/TOOLS.md  — smt quick reference for Claude
+    # ------------------------------------------------------------------
+    tools_md = claude_dir / 'TOOLS.md'
+    tools_content = """\
+# SMT CLI — Quick Reference
 
-    print(f"\nDone. Use 'smt' commands from any terminal in {target_dir}")
-    print("  smt status             # check graph health")
-    print("  smt build              # build graph from src/")
-    print("  smt search <query>     # semantic search")
+Use `smt` commands via Bash instead of reading/grepping source files.
+
+---
+
+## Decision Table
+
+| You want to...                          | Run this                              |
+|-----------------------------------------|---------------------------------------|
+| Understand what a function does         | `smt context <symbol>`                |
+| See what a function depends on          | `smt context <symbol> --depth 2`      |
+| See who calls a function                | `smt callers <symbol>`                |
+| Find code by meaning / topic            | `smt search "description"`            |
+| Check graph health                      | `smt status`                          |
+| Build graph from source                 | `smt build`                           |
+| Wipe and rebuild                        | `smt build --clear`                   |
+| Sync graph after a commit               | `smt diff HEAD~1..HEAD`               |
+| Start Neo4j                             | `smt docker up`                       |
+
+---
+
+## Session Start Checklist
+
+```bash
+smt status          # node count > 100? Graph is ready.
+smt build           # if empty — build from src/
+smt diff            # if stale — sync with recent commits
+```
+
+## Hard Restart (graph broken / corrupted)
+
+```bash
+smt build --clear   # wipes all nodes/edges and rebuilds from source
+smt status          # confirm node count > 100
+```
+"""
+    with open(tools_md, 'w', encoding='utf-8') as f:
+        f.write(tools_content)
+    print("  .claude/TOOLS.md       [OK]")
+
+    # ------------------------------------------------------------------
+    # 3. CLAUDE.md — tells Claude how to work in this project
+    # ------------------------------------------------------------------
+    claude_md = target_dir / 'CLAUDE.md'
+    if not claude_md.exists():
+        project_name = target_dir.name
+        claude_md_content = f"""\
+# CLAUDE.md
+
+## Code Context — use SMT, not file reads
+
+This project is indexed by **save-my-tokens (SMT)**. Query the graph instead of reading files.
+
+### Before you read any file, try this first:
+
+```bash
+smt context <SymbolName>        # definition + deps + callers
+smt search "what you're looking for"  # semantic search
+smt callers <SymbolName>        # who calls this
+smt status                      # check graph health
+```
+
+### Session start
+
+```bash
+smt status      # is the graph ready? (node count > 0)
+smt build       # build if empty
+smt diff        # sync if stale after recent commits
+```
+
+### When to read files directly
+
+Only read a file when:
+- `smt context` doesn't return enough detail (e.g. need to see the full function body)
+- You are writing new code and need the exact surrounding lines
+
+### Project: {project_name}
+
+SMT is installed at: `{SMT_DIR}`
+Neo4j browser: http://localhost:7474
+"""
+        with open(claude_md, 'w', encoding='utf-8') as f:
+            f.write(claude_md_content)
+        print("  CLAUDE.md              [OK]")
+    else:
+        print("  CLAUDE.md              [skipped — already exists]")
+
+    print(f"\nDone. Start a session:")
+    print("  smt docker up          # start Neo4j (first time)")
+    print("  smt build              # index your codebase")
+    print("  smt status             # verify graph is ready")
     return 0
 
 
@@ -358,6 +465,7 @@ commands:
 
     # build
     p_build = sub.add_parser('build', help='Build graph')
+    p_build.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
     p_build.add_argument('--check', action='store_true', help='Show stats only')
     p_build.add_argument('--clear', action='store_true', help='Wipe and rebuild')
 
@@ -394,7 +502,7 @@ commands:
     args = parser.parse_args()
 
     if args.command == 'build':
-        return cmd_build(check=args.check, clear=args.clear)
+        return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
     elif args.command == 'context':
         return cmd_context(args.symbol, depth=args.depth, callers=args.callers)
     elif args.command == 'search':
