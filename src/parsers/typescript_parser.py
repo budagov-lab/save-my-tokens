@@ -10,8 +10,9 @@ from src.parsers.import_resolver import ImportResolver
 
 # Load Tree-sitter TypeScript grammar
 try:
-    from tree_sitter_typescript import language
-    TYPESCRIPT_LANGUAGE = Language(language())
+    from tree_sitter_typescript import language_typescript, language_tsx
+    TYPESCRIPT_LANGUAGE = Language(language_typescript())
+    TSX_LANGUAGE = Language(language_tsx())
 except ImportError:
     raise ImportError(
         "tree-sitter-typescript not installed. Run: pip install tree-sitter-typescript"
@@ -36,6 +37,12 @@ class TypeScriptParser:
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
+
+        # Set language based on file extension
+        if file_path.endswith('.tsx'):
+            self.parser.language = TSX_LANGUAGE
+        else:
+            self.parser.language = TYPESCRIPT_LANGUAGE
 
         with open(file_path, "rb") as f:
             source_code = f.read()

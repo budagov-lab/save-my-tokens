@@ -100,12 +100,12 @@ def cmd_status() -> int:
     try:
         settings, Neo4jClient, *_ = _get_services()
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-        with client.session() as session:
+        with client.driver.session() as session:
             counts = session.run(
                 "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt"
             ).data()
             edge_count = session.run("MATCH ()-[r]->() RETURN count(r) AS cnt").single()['cnt']
-        client.close()
+        client.driver.close()
 
         total = sum(r['cnt'] for r in counts)
         print(f"Graph:  {total} nodes, {edge_count} edges")
@@ -153,10 +153,19 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
     print(f"{'Rebuilding' if clear else 'Building'} graph from {src_dir} ...")
 
     try:
+        from loguru import logger
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+
+        # Clear if requested
+        if clear:
+            logger.info(f"Clearing graph database...")
+            with client.driver.session() as session:
+                session.run("MATCH (n) DETACH DELETE n")
+            logger.info("Database cleared.")
+
         builder = GraphBuilder(str(src_dir), neo4j_client=client)
-        builder.build(clear_first=clear)
-        client.close()
+        builder.build()
+        client.driver.close()
         print("Done.")
         return cmd_status()
     except Exception as e:
@@ -173,7 +182,7 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False) -> int:
 
     try:
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-        with client.session() as session:
+        with client.driver.session() as session:
             # Find the symbol
             node = session.run(
                 "MATCH (n {name: $name}) RETURN n LIMIT 1", name=symbol
@@ -181,7 +190,7 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False) -> int:
 
             if not node:
                 print(f"Symbol '{symbol}' not found in graph.")
-                client.close()
+                client.driver.close()
                 return 1
 
             n = node['n']
@@ -213,7 +222,7 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False) -> int:
                     for c in callers_data:
                         print(f"    {c['name']}  ({c.get('file', '?')})")
 
-        client.close()
+        client.driver.close()
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -240,22 +249,25 @@ def cmd_search(query: str, top_k: int = 5) -> int:
         # Load symbols from Neo4j into the index
         from src.graph.neo4j_client import Neo4jClient
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-        with client.session() as session:
+        with client.driver.session() as session:
             rows = session.run(
-                "MATCH (n) WHERE n.name IS NOT NULL RETURN n"
+                "MATCH (n) RETURN n, labels(n) as labels"
             ).data()
-        client.close()
+        client.driver.close()
 
         from src.parsers.symbol import Symbol
         for row in rows:
             n = row['n']
+            labels = row['labels']
+            if not n.get('name'):
+                continue
             sym = Symbol(
                 name=n.get('name', ''),
-                type=next(iter(n.labels), 'Unknown'),
+                type=labels[0] if labels else 'Unknown',
                 file=n.get('file', ''),
                 line=n.get('line', 0),
-                signature=n.get('signature', ''),
-                docstring=n.get('docstring', ''),
+                column=n.get('column', 0),
+                docstring=n.get('docstring'),
             )
             symbol_index.add(sym)
 
