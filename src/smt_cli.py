@@ -136,10 +136,20 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
     if target_dir:
         target_path = Path(target_dir).resolve()
     else:
-        # Use current directory, or fall back to SMT_DIR if cwd is SMT directory
+        # Priority:
+        # 1. Check for .smt_config in .claude/ (from smt setup)
+        # 2. Use current directory if it has src/
+        # 3. Fail with helpful message
         cwd = Path.cwd()
-        if cwd == SMT_DIR or cwd.parent == SMT_DIR:
-            target_path = SMT_DIR
+        smt_config_file = cwd / '.claude' / '.smt_config'
+
+        if smt_config_file.exists():
+            try:
+                with open(smt_config_file, 'r', encoding='utf-8') as f:
+                    smt_config = json.load(f)
+                    target_path = Path(smt_config['project_dir']).resolve()
+            except (json.JSONDecodeError, KeyError, FileNotFoundError):
+                target_path = cwd
         else:
             target_path = cwd
 
@@ -147,7 +157,10 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
     src_dir = target_path / 'src'
     if not src_dir.exists():
         print(f"ERROR: No 'src/' directory found in {target_path}")
-        print(f"       Make sure you're in a project with a src/ subdirectory")
+        print(f"\nOptions:")
+        print(f"  1. Run from a project with src/:  cd /path/to/project && smt build")
+        print(f"  2. Specify the directory:         smt build --dir /path/to/project")
+        print(f"  3. Set up the project:            smt setup --dir /path/to/project")
         return 1
 
     print(f"{'Rebuilding' if clear else 'Building'} graph from {src_dir} ...")
@@ -289,6 +302,7 @@ def cmd_search(query: str, top_k: int = 5) -> int:
             symbol_index.add(sym)
 
         svc = EmbeddingService(symbol_index, cache_dir=SMT_DIR / '.smt' / 'embeddings')
+        svc.build_index()  # Build FAISS index from symbols
         results = svc.search(query, top_k=top_k)
 
         if not results:
@@ -342,6 +356,18 @@ def cmd_setup(target_dir: Path) -> int:
     claude_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Configuring SMT for: {target_dir}")
+
+    # ------------------------------------------------------------------
+    # 0. .claude/.smt_config — store project metadata for CLI
+    # ------------------------------------------------------------------
+    smt_config_file = claude_dir / '.smt_config'
+    smt_config = {
+        'project_dir': str(target_dir),
+        'project_name': target_dir.name,
+    }
+    with open(smt_config_file, 'w', encoding='utf-8') as f:
+        json.dump(smt_config, f, indent=2)
+    print("  .claude/.smt_config    [OK]")
 
     # ------------------------------------------------------------------
     # 1. .claude/settings.json
@@ -463,10 +489,12 @@ Neo4j browser: http://localhost:7474
     else:
         print("  CLAUDE.md              [skipped — already exists]")
 
-    print(f"\nDone. Start a session:")
-    print("  smt docker up          # start Neo4j (first time)")
-    print("  smt build              # index your codebase")
-    print("  smt status             # verify graph is ready")
+    print(f"\nDone! To build your graph:")
+    print(f"  smt docker up          # start Neo4j (first time only)")
+    print(f"  smt build              # index your codebase from {target_dir}/src/")
+    print(f"  smt status             # verify graph is ready")
+    print(f"\nNote: You can run 'smt build' from any directory—it will use the")
+    print(f"      project directory you configured here ({target_dir})")
     return 0
 
 

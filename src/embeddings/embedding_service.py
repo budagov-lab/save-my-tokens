@@ -47,12 +47,18 @@ class EmbeddingService:
                 self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL)
                 logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
             except Exception as e:
+                error_msg = str(e)
                 logger.error(f"Failed to load embedding model {settings.EMBEDDING_MODEL}: {e}")
                 # Surface error to CLI user (not just logger)
+                if "torchvision" in error_msg.lower() or "operator torchvision" in error_msg.lower():
+                    fix_msg = "pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cpu"
+                else:
+                    fix_msg = "pip install torch --index-url https://download.pytorch.org/whl/cpu"
+
                 print(
-                    f"\n[smt] Warning: Embedding model failed to load ({type(e).__name__}): {e}\n"
+                    f"\n[smt] Warning: Embedding model failed to load ({type(e).__name__})\n"
                     f"      Semantic search will be unavailable.\n"
-                    f"      Fix: pip install torch --index-url https://download.pytorch.org/whl/cpu\n",
+                    f"      Fix: {fix_msg}\n",
                     file=sys.stderr,
                 )
         else:
