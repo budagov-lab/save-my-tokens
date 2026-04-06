@@ -6,7 +6,7 @@ from loguru import logger
 from neo4j import GraphDatabase, Session
 
 from src.config import settings
-from src.graph.node_types import Edge, Node, NodeType
+from src.graph.node_types import CommitNode, Edge, Node, NodeType
 
 
 class Neo4jClient:
@@ -65,6 +65,7 @@ class Neo4jClient:
             "CREATE INDEX node_name_idx IF NOT EXISTS FOR (n:Node) ON (n.name)",
             "CREATE INDEX node_file_idx IF NOT EXISTS FOR (n:Node) ON (n.file)",
             "CREATE INDEX node_type_idx IF NOT EXISTS FOR (n:Node) ON (n.type)",
+            "CREATE INDEX commit_hash_idx IF NOT EXISTS FOR (c:Commit) ON (c.commit_hash)",
         ]
         with self.driver.session() as session:
             for query in queries:
@@ -204,3 +205,45 @@ class Neo4jClient:
             edge_count = edge_result.single()["count"]
 
         return {"node_count": node_count, "edge_count": edge_count}
+
+    def begin_transaction(self):
+        """Open a session and begin an explicit transaction.
+
+        Caller is responsible for calling tx.commit() or tx.rollback().
+
+        Returns:
+            neo4j Transaction object
+        """
+        self._active_session = self.driver.session()
+        return self._active_session.begin_transaction()
+
+    def create_commit_node(self, commit: CommitNode) -> None:
+        """Create a commit node in the graph.
+
+        Args:
+            commit: CommitNode to create
+        """
+        cypher = """
+        MERGE (c:Commit {commit_hash: $hash})
+        SET c += $props
+        """
+        with self.driver.session() as session:
+            session.run(cypher, hash=commit.commit_hash, props=commit.to_cypher_props())
+        logger.debug(f"Created commit node: {commit.short_hash}")
+
+    def create_modified_by_edges(self, symbol_node_ids: List[str], commit_hash: str) -> None:
+        """Link symbols to a commit via MODIFIED_BY edges.
+
+        Args:
+            symbol_node_ids: List of symbol node_ids that changed
+            commit_hash: Commit hash to link to
+        """
+        cypher = """
+        MATCH (s {node_id: $symbol_id})
+        MATCH (c:Commit {commit_hash: $commit_hash})
+        MERGE (s)-[:MODIFIED_BY]->(c)
+        """
+        with self.driver.session() as session:
+            for symbol_id in symbol_node_ids:
+                session.run(cypher, symbol_id=symbol_id, commit_hash=commit_hash)
+        logger.debug(f"Created {len(symbol_node_ids)} MODIFIED_BY edges to commit {commit_hash}")

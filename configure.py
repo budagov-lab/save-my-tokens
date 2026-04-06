@@ -42,6 +42,15 @@ def install_packages() -> bool:
     print("[Installing Packages]")
     print("-" * 60)
 
+    # Install torch/torchvision first with specific versions to avoid compatibility issues
+    # SentenceTransformers depends on these and they must be compatible
+    print("  torch (CPU, compatible version)...", end=" ", flush=True)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pip', 'install', 'torch', 'torchvision', '--index-url', 'https://download.pytorch.org/whl/cpu', '-q'],
+        capture_output=True
+    )
+    print("[OK]" if result.returncode == 0 else "[WARN]")
+
     packages = [
         'loguru',
         'neo4j',
@@ -56,6 +65,8 @@ def install_packages() -> bool:
         'gitpython',
         'python-dotenv',
         'tqdm',
+        'requests',
+        'rich',
     ]
 
     for package in packages:
@@ -65,6 +76,15 @@ def install_packages() -> bool:
             capture_output=True
         )
         print("[OK]" if result.returncode == 0 else "[WARN]")
+
+    # Install SMT itself in editable mode so 'smt' command works globally
+    print("  smt (editable install)...", end=" ", flush=True)
+    result = subprocess.run(
+        [sys.executable, '-m', 'pip', 'install', '-e', '.', '-q'],
+        capture_output=True,
+        cwd=Path.cwd()
+    )
+    print("[OK]" if result.returncode == 0 else "[WARN]")
 
     print()
     return True
@@ -93,10 +113,13 @@ def run_setup():
     print("  1. Start Neo4j:")
     print("     smt docker up")
     print()
-    print("  2. Build the graph:")
+    print("  2. Setup your project:")
+    print("     smt setup --dir /path/to/your/project")
+    print()
+    print("  3. Build the graph:")
     print("     smt build")
     print()
-    print("  3. Query:")
+    print("  4. Query (from anywhere):")
     print("     smt status")
     print("     smt search \"your query\"")
     print("     smt context MyFunction")

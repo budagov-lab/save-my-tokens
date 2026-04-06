@@ -45,6 +45,40 @@ class SymbolIndex:
         for symbol in symbols:
             self.add(symbol)
 
+    def remove(self, symbol: Symbol) -> bool:
+        """Remove a symbol from all index structures.
+
+        Args:
+            symbol: Symbol to remove
+
+        Returns:
+            True if symbol was found and removed, False if not found
+        """
+        # Remove from _all_symbols
+        try:
+            self._all_symbols.remove(symbol)
+        except ValueError:
+            return False  # Not in index
+
+        # Remove from _by_name
+        name_list = self._by_name.get(symbol.name, [])
+        if symbol in name_list:
+            name_list.remove(symbol)
+        if not name_list:
+            del self._by_name[symbol.name]
+
+        # Remove from _by_qualified_name
+        self._by_qualified_name.pop(symbol.qualified_name, None)
+
+        # Remove from _by_file
+        file_list = self._by_file.get(symbol.file, [])
+        if symbol in file_list:
+            file_list.remove(symbol)
+        if not file_list:
+            del self._by_file[symbol.file]
+
+        return True
+
     def get_by_name(self, name: str) -> List[Symbol]:
         """Get all symbols with given name."""
         return self._by_name.get(name, [])

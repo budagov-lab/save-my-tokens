@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
 
 from src.config import settings
 from src.parsers.symbol import Symbol
@@ -126,12 +127,22 @@ class EmbeddingService:
         embeddings_to_add = []
         symbol_ids = []
 
-        for idx, symbol in enumerate(symbols):
-            embedding = self.embed_symbol(symbol)
-            if embedding:
-                embeddings_to_add.append(embedding)
-                self.id_to_symbol[idx] = symbol
-                symbol_ids.append(idx)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold magenta]Generating embeddings"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TextColumn("[cyan]{task.description}"),
+        ) as progress:
+            task = progress.add_task("", total=len(symbols))
+
+            for idx, symbol in enumerate(symbols):
+                embedding = self.embed_symbol(symbol)
+                if embedding:
+                    embeddings_to_add.append(embedding)
+                    self.id_to_symbol[idx] = symbol
+                    symbol_ids.append(idx)
+                progress.update(task, description=f"{len(embeddings_to_add)} embeddings", advance=1)
 
         if not embeddings_to_add:
             logger.warning("No embeddings generated. Check OpenAI API key and network.")

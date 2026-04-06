@@ -195,11 +195,11 @@ class IncrementalSymbolUpdater:
         Args:
             symbol: Symbol to remove
         """
-        # This is a simplified removal - in production, we'd need to
-        # properly maintain all index data structures
-        logger.debug(f"Removing symbol from index: {symbol.qualified_name}")
-        # Note: SymbolIndex doesn't have a remove method yet
-        # We'd need to add it to properly support this
+        removed = self.index.remove(symbol)
+        if removed:
+            logger.debug(f"Removed symbol from index: {symbol.qualified_name}")
+        else:
+            logger.warning(f"Symbol not in index: {symbol.qualified_name}")
 
     def _delete_symbol_edges(
         self, tx, file_path: str, symbol_name: str

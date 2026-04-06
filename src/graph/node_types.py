@@ -15,6 +15,7 @@ class NodeType(str, Enum):
     VARIABLE = "Variable"
     TYPE = "Type"
     INTERFACE = "Interface"
+    COMMIT = "Commit"
 
 
 class EdgeType(str, Enum):
@@ -27,6 +28,7 @@ class EdgeType(str, Enum):
     DEPENDS_ON = "DEPENDS_ON"
     TYPE_OF = "TYPE_OF"
     IMPLEMENTS = "IMPLEMENTS"
+    MODIFIED_BY = "MODIFIED_BY"
 
 
 @dataclass
@@ -77,3 +79,29 @@ class Edge:
         if self.metadata:
             props.update(self.metadata)
         return props
+
+
+@dataclass
+class CommitNode:
+    """Represents a git commit in the version graph."""
+
+    commit_hash: str       # Full SHA
+    short_hash: str        # First 8 characters
+    message: str           # First line of commit message
+    author: str            # Commit author name
+    timestamp: str         # ISO 8601 timestamp
+    branch: str            # Branch name at commit time
+    files_changed: int     # Number of files modified
+
+    def to_cypher_props(self) -> Dict[str, Any]:
+        """Convert commit to Neo4j node properties."""
+        return {
+            "node_id": f"Commit:{self.commit_hash}",
+            "commit_hash": self.commit_hash,
+            "short_hash": self.short_hash,
+            "message": self.message,
+            "author": self.author,
+            "timestamp": self.timestamp,
+            "branch": self.branch,
+            "files_changed": self.files_changed,
+        }
