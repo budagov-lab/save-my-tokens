@@ -329,20 +329,67 @@ def cmd_search(query: str, top_k: int = 5) -> int:
 # diff
 # ---------------------------------------------------------------------------
 
-def cmd_diff(commit_range: str = 'HEAD~1..HEAD') -> int:
-    settings, _, _, _, _, IncrementalSymbolUpdater = _get_services()
+def cmd_diff(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = None) -> int:
+    settings, Neo4jClient, _, SymbolIndex, EmbeddingService, IncrementalSymbolUpdater = _get_services()
 
     try:
+        # Determine target directory (same logic as cmd_build)
+        if target_dir:
+            target_path = Path(target_dir).resolve()
+        else:
+            cwd = Path.cwd()
+            smt_config_file = cwd / '.claude' / '.smt_config'
+
+            if smt_config_file.exists():
+                try:
+                    with open(smt_config_file, 'r', encoding='utf-8') as f:
+                        smt_config = json.load(f)
+                        target_path = Path(smt_config['project_dir']).resolve()
+                except (json.JSONDecodeError, KeyError, FileNotFoundError):
+                    target_path = cwd
+            else:
+                target_path = cwd
+
+        # Check if it looks like a git repository
+        if not (target_path / '.git').exists():
+            print(f"ERROR: No .git directory found in {target_path}")
+            return 1
+
+        from loguru import logger
+
+        # Create Neo4j client
+        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+
+        # Create symbol index
+        index = SymbolIndex()
+
+        # Create embedding service
+        cache_dir = target_path / '.claude' / '.embeddings'
+        embedding_svc = EmbeddingService(index, cache_dir=cache_dir)
+
+        # Create updater
         updater = IncrementalSymbolUpdater(
-            neo4j_uri=settings.NEO4J_URI,
-            neo4j_user=settings.NEO4J_USER,
-            neo4j_password=settings.NEO4J_PASSWORD,
+            symbol_index=index,
+            neo4j_client=client,
+            embedding_service=embedding_svc,
+            base_path=str(target_path),
         )
-        result = updater.update_from_git(commit_range, repo_path=str(SMT_DIR))
-        print(f"Synced: {result}")
-        return 0
+
+        # Run sync
+        success = updater.update_from_git(commit_range, repo_path=str(target_path))
+        client.driver.close()
+
+        if success:
+            print("✓ Graph synced successfully")
+            return 0
+        else:
+            print("✗ Graph sync failed")
+            return 1
+
     except Exception as e:
         print(f"ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
@@ -515,7 +562,8 @@ commands:
   context <symbol>       Symbol definition, deps, callers
   search <query>         Semantic search
   callers <symbol>       Who calls this symbol
-  diff [range]           Sync graph after commits
+  diff [range]           Sync graph with git commits
+  sync [range]           Alias for diff (incremental update)
   docker up|down|status  Manage Neo4j container
   status                 Graph health check
   setup [--dir <path>]   Configure a project
@@ -546,9 +594,15 @@ commands:
     p_callers = sub.add_parser('callers', help='Who calls a symbol')
     p_callers.add_argument('symbol')
 
-    # diff
+    # diff / sync
     p_diff = sub.add_parser('diff', help='Sync graph after commits')
     p_diff.add_argument('range', nargs='?', default='HEAD~1..HEAD')
+    p_diff.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
+
+    # sync (alias for diff)
+    p_sync = sub.add_parser('sync', help='Sync graph with git commits (alias for diff)')
+    p_sync.add_argument('range', nargs='?', default='HEAD~1..HEAD')
+    p_sync.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
 
     # docker
     p_docker = sub.add_parser('docker', help='Manage Neo4j container')
@@ -571,8 +625,8 @@ commands:
         return cmd_search(args.query, top_k=args.top)
     elif args.command == 'callers':
         return cmd_callers(args.symbol)
-    elif args.command == 'diff':
-        return cmd_diff(args.range)
+    elif args.command in ('diff', 'sync'):
+        return cmd_diff(commit_range=args.range, target_dir=args.dir)
     elif args.command == 'docker':
         return cmd_docker(args.action)
     elif args.command == 'status':
