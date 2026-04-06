@@ -436,6 +436,11 @@ def _require_git(path: Path) -> bool:
 
 def _git_initial_commit(target_dir: Path) -> None:
     """Anchor current project state in git history."""
+    # Configure git to avoid signing issues
+    subprocess.run(['git', 'config', 'user.name', 'SMT'], cwd=target_dir, capture_output=True)
+    subprocess.run(['git', 'config', 'user.email', 'smt@local'], cwd=target_dir, capture_output=True)
+    subprocess.run(['git', 'config', 'commit.gpgsign', 'false'], cwd=target_dir, capture_output=True)
+
     result = subprocess.run(
         ['git', 'log', '--oneline', '-1'],
         cwd=target_dir, capture_output=True
