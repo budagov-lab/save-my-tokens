@@ -1,7 +1,7 @@
 # Git Integration Status
 
 **Last Updated**: 2026-04-06  
-**Progress**: 50% Complete (Steps 1-3 of 7)
+**Progress**: 86% Complete (Steps 1-6 of 7)
 
 ## Overview
 
@@ -33,40 +33,44 @@ Implementing git-aware incremental graph updates. After each commit, SMT will au
 - Added commit index to database
 - File: `src/graph/neo4j_client.py`
 
+### Step 4 ✅ Incremental Update Pipeline
+- Implemented `update_from_git(commit_range, repo_path)` main entry point
+- All helper methods: `_run_git()`, `_get_commit_metadata()`, `_parse_file()`, `_compute_delta()`, `_update_embeddings_for_changed()`
+- Full pipeline with Rich progress bar
+- Handles deleted/added/modified files correctly
+- Updated constructor to accept embedding_service and base_path
+- File: `src/incremental/updater.py` ✓
+
+### Step 5 ✅ CLI Enhancements
+- Fixed `cmd_diff()` constructor with proper dependencies
+- Added support for `--dir` argument
+- Added `smt sync` command as user-friendly alias
+- Both `diff` and `sync` support commit range: `smt sync HEAD~5..HEAD`
+- File: `src/smt_cli.py` ✓
+
+### Step 6 ✅ Hook Installation
+- Implemented `cmd_setup_hooks(target_dir)` for post-commit hook setup
+- Implemented `cmd_remove_hooks(target_dir)` for safe hook removal
+- Auto-integrated into `cmd_setup()` workflow
+- Added CLI subcommands: `smt hooks install`, `smt hooks uninstall`
+- Hook is idempotent and preserves existing hooks
+- File: `src/smt_cli.py` ✓
+
 ## In Progress 🔄
 
-### Step 4: Incremental Update Pipeline
-- Implement `update_from_git(commit_range, repo_path)` method
-- Add helper methods:
-  - `_run_git()` — subprocess wrapper for git commands
-  - `_get_commit_metadata()` — extract commit info
-  - `_parse_file()` — re-parse changed files
-  - `_compute_delta()` — compare before/after symbols
-  - `_update_embeddings_for_changed()` — incremental embedding updates
-- File: `src/incremental/updater.py`
-- Est. Time: 20-30 minutes
-
-## Pending ⏳
-
-### Step 5: CLI Enhancements
-- Fix `cmd_diff()` constructor
-- Add `cmd_setup_hooks()` for post-commit hook
-- Add CLI subcommands: `smt sync`, `smt hooks install/uninstall`
-- File: `src/smt_cli.py`
-- Est. Time: 15 minutes
-
-### Step 6: Hook Installation
-- Auto-install `.git/hooks/post-commit` during setup
-- Idempotent (no duplicates if already present)
-- Preserve existing hook content
-- Est. Time: 10 minutes
-
 ### Step 7: End-to-End Testing
-- Verify hook creation
-- Test commit → graph sync
-- Verify MODIFIED_BY edges
-- Test manual `smt sync`
-- Est. Time: 15 minutes
+- Test plan created: `GIT_INTEGRATION_TEST_PLAN.md`
+- 9 test phases ready to execute:
+  1. Setup & hook installation
+  2. Build initial graph
+  3. Commit-based auto-sync (post-commit hook)
+  4. Manual `smt sync` command
+  5. Graph consistency verification
+  6. MODIFIED_BY edge queries
+  7. Embeddings update verification
+  8. Hook uninstall
+  9. Hook reinstall
+- Est. Time: 15 minutes to run all phases
 
 ## User Workflow (When Complete)
 
@@ -95,11 +99,11 @@ ORDER BY c.timestamp DESC
 **Hook Command**: `smt diff HEAD~1..HEAD >/dev/null 2>&1 &`
 
 **Key Files Modified**:
-- `src/graph/node_types.py` — Schema
-- `src/parsers/symbol_index.py` — Deletion support
-- `src/graph/neo4j_client.py` — Commit operations
-- `src/incremental/updater.py` — Main pipeline (IN PROGRESS)
-- `src/smt_cli.py` — CLI integration (PENDING)
+- `src/graph/node_types.py` — Schema (DONE)
+- `src/parsers/symbol_index.py` — Deletion support (DONE)
+- `src/graph/neo4j_client.py` — Commit operations (DONE)
+- `src/incremental/updater.py` — Main pipeline + update_from_git() (DONE)
+- `src/smt_cli.py` — CLI integration + hooks (DONE)
 
 **Design Constraints**:
 - Local git only (no GitHub API)
