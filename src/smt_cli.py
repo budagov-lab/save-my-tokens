@@ -27,6 +27,7 @@ import argparse
 import subprocess
 import stat
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -156,6 +157,10 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
         else:
             target_path = cwd
 
+    # Require git
+    if not _require_git(target_path):
+        return 1
+
     # Find src directory
     src_dir = target_path / 'src'
     if not src_dir.exists():
@@ -193,8 +198,25 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
 # context
 # ---------------------------------------------------------------------------
 
+def _resolve_project_path() -> Path:
+    """Resolve project path from .smt_config or cwd."""
+    cwd = Path.cwd()
+    smt_config_file = cwd / '.claude' / '.smt_config'
+    if smt_config_file.exists():
+        try:
+            with open(smt_config_file, 'r', encoding='utf-8') as f:
+                smt_config = json.load(f)
+                return Path(smt_config['project_dir']).resolve()
+        except (json.JSONDecodeError, KeyError, FileNotFoundError):
+            pass
+    return cwd
+
+
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter: str | None = None) -> int:
     settings, Neo4jClient, *_ = _get_services()
+
+    if not _require_git(_resolve_project_path()):
+        return 1
 
     try:
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
@@ -276,6 +298,9 @@ def cmd_callers(symbol: str) -> int:
 
 def cmd_search(query: str, top_k: int = 5) -> int:
     settings, _, _, SymbolIndex, EmbeddingService, _ = _get_services()
+
+    if not _require_git(_resolve_project_path()):
+        return 1
 
     try:
         symbol_index = SymbolIndex()
@@ -394,6 +419,48 @@ def cmd_diff(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
         import traceback
         traceback.print_exc()
         return 1
+
+
+# ---------------------------------------------------------------------------
+# git helpers
+# ---------------------------------------------------------------------------
+
+def _require_git(path: Path) -> bool:
+    """Check that path is a git repository. Prints error if not."""
+    if not (path / '.git').exists():
+        print(f"ERROR: {path} is not a git repository.")
+        print(f"  Run: smt setup --dir {path}")
+        return False
+    return True
+
+
+def _git_initial_commit(target_dir: Path) -> None:
+    """Anchor current project state in git history."""
+    result = subprocess.run(
+        ['git', 'log', '--oneline', '-1'],
+        cwd=target_dir, capture_output=True
+    )
+    has_commits = result.returncode == 0 and result.stdout.strip()
+
+    if has_commits:
+        subprocess.run(['git', 'add', '.claude/'], cwd=target_dir, capture_output=True)
+        staged = subprocess.run(
+            ['git', 'diff', '--cached', '--name-only'],
+            cwd=target_dir, capture_output=True
+        )
+        if staged.stdout.strip():
+            subprocess.run(
+                ['git', 'commit', '-m', 'chore: Initialize SMT graph index'],
+                cwd=target_dir, capture_output=True
+            )
+    else:
+        subprocess.run(['git', 'add', '.'], cwd=target_dir, capture_output=True)
+        subprocess.run(
+            ['git', 'commit', '-m', 'Initial: Build graph index'],
+            cwd=target_dir, capture_output=True
+        )
+
+    print("  git commit             [OK] — Graph state anchored in git history")
 
 
 # ---------------------------------------------------------------------------
@@ -539,20 +606,51 @@ Neo4j browser: http://localhost:7474
     else:
         print("  CLAUDE.md              [skipped — already exists]")
 
-    print(f"\nDone! To build your graph:")
-    print(f"  smt docker up          # start Neo4j (first time only)")
-    print(f"  smt build              # index your codebase from {target_dir}/src/")
-    print(f"  smt status             # verify graph is ready")
-    print(f"\nNote: You can run 'smt build' from any directory—it will use the")
-    print(f"      project directory you configured here ({target_dir})")
+    # ------------------------------------------------------------------
+    # 4. Git — initialize and anchor graph state
+    # ------------------------------------------------------------------
+    print("")
+    if not (target_dir / '.git').exists():
+        try:
+            subprocess.run(['git', 'init', str(target_dir)], check=True, capture_output=True)
+            print("  .git/                  [INIT] — Initialized new git repository")
+        except subprocess.CalledProcessError as e:
+            print(f"  .git/                  [WARN] — git init failed: {e}")
+    else:
+        print("  .git/                  [OK] — Using existing git repository")
 
     # ------------------------------------------------------------------
-    # Install post-commit hook (for automatic graph sync)
+    # 5. Build initial graph
+    # ------------------------------------------------------------------
+    src_dir = target_dir / 'src'
+    if src_dir.exists():
+        print("\nBuilding initial graph (this may take a few minutes)...")
+        build_result = cmd_build(target_dir=str(target_dir))
+        if build_result != 0:
+            print("WARNING: Graph build failed — run 'smt build' manually after fixing the issue")
+    else:
+        print(f"\n  src/                   [SKIP] — No src/ directory found; run 'smt build --dir {target_dir}' when ready")
+
+    # ------------------------------------------------------------------
+    # 6. Anchor with initial git commit
+    # ------------------------------------------------------------------
+    try:
+        _git_initial_commit(target_dir)
+    except Exception as e:
+        print(f"  git commit             [WARN] — {e}")
+
+    # ------------------------------------------------------------------
+    # 7. Install post-commit hook
     # ------------------------------------------------------------------
     try:
         cmd_setup_hooks(target_dir)
     except Exception as e:
         print(f"Warning: Failed to setup git hook: {e}")
+
+    print(f"\nSetup complete! Graph is synced with git.")
+    print(f"  Every git commit will now auto-update the graph via post-commit hook.")
+    print(f"  Manual sync: smt sync")
+    print(f"  Graph status: smt status")
 
     return 0
 
