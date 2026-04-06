@@ -25,7 +25,10 @@ import sys
 import json
 import argparse
 import subprocess
+import stat
 from pathlib import Path
+
+from loguru import logger
 
 # Ensure UTF-8 output on Windows
 if sys.platform == 'win32':
@@ -542,7 +545,122 @@ Neo4j browser: http://localhost:7474
     print(f"  smt status             # verify graph is ready")
     print(f"\nNote: You can run 'smt build' from any directory—it will use the")
     print(f"      project directory you configured here ({target_dir})")
+
+    # ------------------------------------------------------------------
+    # Install post-commit hook (for automatic graph sync)
+    # ------------------------------------------------------------------
+    try:
+        cmd_setup_hooks(target_dir)
+    except Exception as e:
+        print(f"Warning: Failed to setup git hook: {e}")
+
     return 0
+
+
+# ---------------------------------------------------------------------------
+# hooks
+# ---------------------------------------------------------------------------
+
+def cmd_setup_hooks(target_dir: Path) -> bool:
+    """Install post-commit hook for automatic graph sync.
+
+    Args:
+        target_dir: Target project directory
+
+    Returns:
+        True if hook was installed, False otherwise
+    """
+    git_dir = target_dir / '.git'
+    if not git_dir.exists():
+        logger.warning(f".git not found in {target_dir}, skipping hook setup")
+        return False
+
+    hooks_dir = git_dir / 'hooks'
+    if not hooks_dir.exists():
+        logger.debug(f"Creating .git/hooks directory")
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    hook_file = hooks_dir / 'post-commit'
+    smt_marker = "# SMT: Auto-sync graph on commit"
+
+    # Read existing hook if present
+    existing_content = ""
+    if hook_file.exists():
+        with open(hook_file, 'r', encoding='utf-8') as f:
+            existing_content = f.read()
+
+        # Check if SMT hook already installed (idempotent)
+        if smt_marker in existing_content:
+            logger.debug(f"SMT hook already installed in {hook_file}")
+            return True
+
+    # Append SMT hook to existing content
+    smt_hook = f"""{smt_marker}
+smt diff HEAD~1..HEAD >/dev/null 2>&1 &
+exit 0
+"""
+
+    new_content = existing_content
+    if existing_content and not existing_content.endswith('\n'):
+        new_content += '\n'
+    new_content += smt_hook
+
+    # Write hook file
+    with open(hook_file, 'w', encoding='utf-8') as f:
+        f.write(new_content)
+
+    # Make executable
+    st = hook_file.stat()
+    hook_file.chmod(st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+    logger.info(f"Installed post-commit hook at {hook_file}")
+    print(f"  .git/hooks/post-commit [OK] — Graph will sync after each commit")
+    return True
+
+
+def cmd_remove_hooks(target_dir: Path) -> bool:
+    """Remove SMT post-commit hook.
+
+    Args:
+        target_dir: Target project directory
+
+    Returns:
+        True if hook was removed, False if not found
+    """
+    git_dir = target_dir / '.git'
+    hook_file = git_dir / 'hooks' / 'post-commit'
+
+    if not hook_file.exists():
+        logger.warning(f"Hook file not found: {hook_file}")
+        return False
+
+    # Read and remove SMT hook lines
+    with open(hook_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    # Remove SMT hook block
+    new_lines = []
+    skip_block = False
+    for line in lines:
+        if "# SMT: Auto-sync graph on commit" in line:
+            skip_block = True
+            continue
+        if skip_block and line.strip() == "exit 0":
+            skip_block = False
+            continue
+        if not skip_block:
+            new_lines.append(line)
+
+    # Write back or delete if empty
+    if new_lines and any(line.strip() for line in new_lines):
+        with open(hook_file, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+        logger.info(f"Removed SMT hook from {hook_file}")
+    else:
+        hook_file.unlink()
+        logger.info(f"Deleted empty hook file {hook_file}")
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +682,7 @@ commands:
   callers <symbol>       Who calls this symbol
   diff [range]           Sync graph with git commits
   sync [range]           Alias for diff (incremental update)
+  hooks install|uninstall Auto-sync hooks for git commits
   docker up|down|status  Manage Neo4j container
   status                 Graph health check
   setup [--dir <path>]   Configure a project
@@ -615,6 +734,11 @@ commands:
     p_setup = sub.add_parser('setup', help='Configure a project')
     p_setup.add_argument('--dir', default='.', help='Target project directory')
 
+    # hooks
+    p_hooks = sub.add_parser('hooks', help='Manage git hooks')
+    p_hooks.add_argument('action', choices=['install', 'uninstall'], help='Hook action')
+    p_hooks.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
+
     args = parser.parse_args()
 
     if args.command == 'build':
@@ -633,6 +757,26 @@ commands:
         return cmd_status()
     elif args.command == 'setup':
         return cmd_setup(Path(args.dir))
+    elif args.command == 'hooks':
+        target_dir = Path(args.dir) if args.dir else Path.cwd()
+        if args.action == 'install':
+            try:
+                success = cmd_setup_hooks(target_dir)
+                return 0 if success else 1
+            except Exception as e:
+                print(f"ERROR: Failed to install hook: {e}")
+                return 1
+        elif args.action == 'uninstall':
+            try:
+                success = cmd_remove_hooks(target_dir)
+                if success:
+                    print(f"✓ Removed SMT hook from {target_dir}/.git/hooks/post-commit")
+                else:
+                    print(f"✗ Hook not found in {target_dir}/.git/hooks/post-commit")
+                return 0 if success else 1
+            except Exception as e:
+                print(f"ERROR: Failed to remove hook: {e}")
+                return 1
     else:
         parser.print_help()
         return 0
