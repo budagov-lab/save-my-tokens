@@ -42,6 +42,7 @@ SMT_DIR = Path(__file__).parent.parent.resolve()
 
 # Global Neo4j client for connection pooling across CLI commands
 _neo4j_client: Optional[Any] = None
+_validation_cache: Optional[Any] = None
 
 
 def _get_neo4j_client():
@@ -60,6 +61,16 @@ def _close_neo4j_client():
     if _neo4j_client:
         _neo4j_client.driver.close()
         _neo4j_client = None
+
+
+def _get_validation(repo_path: Path):
+    """Get or create cached validation result."""
+    global _validation_cache
+    if _validation_cache is None:
+        from src.graph.validator import validate_graph
+        client = _get_neo4j_client()
+        _validation_cache = validate_graph(client, repo_path)
+    return _validation_cache
 
 
 def _get_services():
@@ -315,6 +326,17 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
         print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
               f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
+        # Print validation status
+        try:
+            validation = _get_validation(_resolve_project_path())
+            from src.graph.validator import format_validation_line, format_stale_files_line
+            print(f"  {format_validation_line(validation)}")
+            stale = format_stale_files_line(validation)
+            if stale:
+                print(stale)
+        except Exception as e:
+            logger.debug(f"Validation check failed: {e}")
+
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -389,6 +411,17 @@ def cmd_definition(symbol: str, file_filter: str | None = None) -> int:
                 for c in callees:
                     file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
                     print(f"    {c['name']}  ({file_base})")
+
+            # Print validation status
+            try:
+                validation = _get_validation(_resolve_project_path())
+                from src.graph.validator import format_validation_line, format_stale_files_line
+                print(f"\n  {format_validation_line(validation)}")
+                stale = format_stale_files_line(validation)
+                if stale:
+                    print(stale)
+            except Exception as e:
+                logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
@@ -510,6 +543,17 @@ def cmd_impact(symbol: str, max_depth: int = 3) -> int:
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
         print(f"\n  impact: nodes={len(nodes)} depth={len(callers_by_depth)} "
               f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
+
+        # Print validation status
+        try:
+            validation = _get_validation(_resolve_project_path())
+            from src.graph.validator import format_validation_line, format_stale_files_line
+            print(f"  {format_validation_line(validation)}")
+            stale = format_stale_files_line(validation)
+            if stale:
+                print(stale)
+        except Exception as e:
+            logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
