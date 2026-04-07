@@ -8,9 +8,11 @@ Usage:
     smt build --check              # Show graph stats
     smt build --clear              # Wipe and rebuild
 
-    smt context <symbol>           # Symbol definition + deps + callers
+    smt definition <symbol>        # What is this symbol? (1-hop, fast)
+    smt context <symbol>           # What do I need to work on this? (bounded, bidirectional)
+    smt impact <symbol>            # What breaks if I change this? (reverse traversal)
+    smt callers <symbol>           # Who calls this symbol (shorthand for context --callers)
     smt search <query>             # Semantic search
-    smt callers <symbol>           # Who calls this symbol
     smt diff [range]               # Sync graph after commits (default: HEAD~1..HEAD)
 
     smt docker up                  # Start Neo4j container
@@ -308,6 +310,199 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
 
 def cmd_callers(symbol: str) -> int:
     return cmd_context(symbol, callers=True)
+
+
+# ---------------------------------------------------------------------------
+# definition
+# ---------------------------------------------------------------------------
+
+def cmd_definition(symbol: str, file_filter: str | None = None) -> int:
+    """Fast definition lookup — just the signature and 1-hop callees."""
+    settings, Neo4jClient, *_ = _get_services()
+
+    if not _require_git(_resolve_project_path()):
+        return 1
+
+    try:
+        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+
+        with client.driver.session() as session:
+            # Find the symbol
+            if file_filter:
+                query = """
+                    MATCH (n {name: $name})
+                    WHERE n.file CONTAINS $file
+                    RETURN n
+                    LIMIT 1
+                """
+                node = session.run(query, name=symbol, file=file_filter).single()
+            else:
+                query = """
+                    MATCH (n {name: $name})
+                    RETURN n,
+                           CASE WHEN n:Function THEN 0
+                                WHEN n:Class THEN 1
+                                ELSE 2 END as priority
+                    ORDER BY priority
+                    LIMIT 1
+                """
+                node = session.run(query, name=symbol).single()
+
+            if not node:
+                print(f"Symbol '{symbol}' not found in graph.")
+                client.driver.close()
+                return 1
+
+            n = node['n']
+            print(f"\n{n.get('name')}  [{', '.join(n.labels)}]")
+            print(f"  file: {n.get('file', '?')}:{n.get('line', '?')}")
+            if n.get('signature'):
+                print(f"  sig:  {n.get('signature')}")
+            if n.get('docstring'):
+                # Print full docstring for definition (not truncated)
+                print(f"  doc:  {n.get('docstring')}")
+
+            # Direct callees only (1 hop, no recursion)
+            callees = session.run(
+                "MATCH (n {name: $name})-[:CALLS]->(callee) RETURN callee.name AS name, callee.file AS file",
+                name=symbol
+            ).data()
+            if callees:
+                print(f"\n  calls ({len(callees)}):")
+                for c in callees:
+                    file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
+                    print(f"    {c['name']}  ({file_base})")
+
+        client.driver.close()
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        logger.error(f"cmd_definition error: {traceback.format_exc()}")
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# impact
+# ---------------------------------------------------------------------------
+
+def _compute_depths(
+    root: str, edges: list[tuple[str, str]]
+) -> dict[str, int]:
+    """
+    Compute depth of each node from root via reverse BFS over edges.
+
+    Used for impact analysis (reverse CALLS direction).
+    Args:
+        root: Root symbol name
+        edges: List of (src, dst) tuples representing CALLS edges
+
+    Returns:
+        Dict mapping node name to depth (root=0, direct callers=1, etc.)
+    """
+    # Reverse the edges for backward traversal
+    reverse_edges: dict[str, list[str]] = {}
+    for src, dst in edges:
+        if dst not in reverse_edges:
+            reverse_edges[dst] = []
+        reverse_edges[dst].append(src)
+
+    # BFS from root in reverse direction
+    depths = {root: 0}
+    queue = [(root, 0)]
+    visited = {root}
+
+    while queue:
+        node, depth = queue.pop(0)
+        # Find all nodes that call this node (reverse direction)
+        for caller in reverse_edges.get(node, []):
+            if caller not in visited:
+                visited.add(caller)
+                depths[caller] = depth + 1
+                queue.append((caller, depth + 1))
+
+    return depths
+
+
+def cmd_impact(symbol: str, max_depth: int = 3) -> int:
+    """Impact analysis — what breaks if I change this symbol?"""
+    settings, Neo4jClient, *_ = _get_services()
+    from src.graph.cycle_detector import detect_cycles
+
+    if not _require_git(_resolve_project_path()):
+        return 1
+
+    try:
+        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+
+        # Get impact graph (reverse traversal)
+        impact_set = client.get_impact_graph(symbol, max_depth=max_depth)
+
+        if not impact_set:
+            print(f"Symbol '{symbol}' not found in graph.")
+            client.driver.close()
+            return 1
+
+        root = impact_set["root"]
+        nodes = impact_set["nodes"]
+        edges = impact_set["edges"]
+
+        # Print header
+        labels = root.get("labels", [])
+        print(f"\nImpact: {root.get('name')}  [{', '.join(labels)}]")
+        print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
+
+        # Compute depths for impact grouping
+        depths = _compute_depths(root.get('name', symbol), edges)
+
+        # Group callers by depth
+        callers_by_depth: dict[int, list[str]] = {}
+        for n in nodes:
+            node_name = n["name"]
+            if node_name != symbol:  # Skip root
+                d = depths.get(node_name, max_depth + 1)
+                if d not in callers_by_depth:
+                    callers_by_depth[d] = []
+                callers_by_depth[d].append(node_name)
+
+        # Print grouped callers
+        for depth_level in sorted(callers_by_depth.keys()):
+            callers = callers_by_depth[depth_level]
+            if depth_level == 1:
+                label = "direct callers"
+            else:
+                label = f"indirect callers — depth {depth_level}"
+            print(f"\n  {label} ({len(callers)}):")
+            for caller in sorted(callers):
+                caller_node = next((n for n in nodes if n["name"] == caller), None)
+                file_base = Path(caller_node.get("file", "?")).name if caller_node else "?"
+                print(f"    {caller}  ({file_base})")
+
+        # Detect cycles in the impact set
+        node_names = [n["name"] for n in nodes]
+        edge_tuples = [(e["src"], e["dst"]) for e in edges]
+        acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
+
+        if cycle_groups:
+            for cg in cycle_groups:
+                cycle_str = " → ".join(cg.members[:3])
+                if len(cg.members) > 3:
+                    cycle_str += f" → ... ({len(cg.members)} total)"
+                print(f"\n  [Cycle: {cycle_str}]")
+                print(f"    {len(cg.members)} functions in cycle — changing {symbol} affects the entire cycle")
+
+        # Print metadata footer
+        token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
+        print(f"\n  impact: nodes={len(nodes)} depth={len(callers_by_depth)} "
+              f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
+
+        client.driver.close()
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        logger.error(f"cmd_impact error: {traceback.format_exc()}")
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -798,9 +993,11 @@ commands:
   build                  Build graph from src/
   build --check          Show graph stats
   build --clear          Wipe and rebuild
-  context <symbol>       Symbol definition, deps, callers
-  search <query>         Semantic search
+  definition <symbol>    Symbol definition (fast, 1-hop)
+  context <symbol>       Symbol context (bidirectional, bounded)
+  impact <symbol>        Impact analysis (reverse traversal)
   callers <symbol>       Who calls this symbol
+  search <query>         Semantic search
   diff [range]           Sync graph with git commits
   sync [range]           Alias for diff (incremental update)
   hooks install|uninstall Auto-sync hooks for git commits
@@ -819,11 +1016,21 @@ commands:
     p_build.add_argument('--clear', action='store_true', help='Wipe and rebuild')
 
     # context
-    p_ctx = sub.add_parser('context', help='Symbol context')
+    p_ctx = sub.add_parser('context', help='Symbol context (bidirectional, bounded)')
     p_ctx.add_argument('symbol')
     p_ctx.add_argument('--depth', type=int, default=1)
     p_ctx.add_argument('--callers', action='store_true')
     p_ctx.add_argument('--file', default=None, help='Filter by file path (substring match)')
+
+    # definition
+    p_def = sub.add_parser('definition', help='Symbol definition (fast, 1-hop)')
+    p_def.add_argument('symbol')
+    p_def.add_argument('--file', default=None, help='Filter by file path (substring match)')
+
+    # impact
+    p_impact = sub.add_parser('impact', help='Impact analysis: what breaks if I change this?')
+    p_impact.add_argument('symbol')
+    p_impact.add_argument('--depth', type=int, default=3, help='Maximum depth for impact traversal')
 
     # search
     p_search = sub.add_parser('search', help='Semantic search')
@@ -866,6 +1073,10 @@ commands:
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
     elif args.command == 'context':
         return cmd_context(args.symbol, depth=args.depth, callers=args.callers, file_filter=args.file)
+    elif args.command == 'definition':
+        return cmd_definition(args.symbol, file_filter=args.file)
+    elif args.command == 'impact':
+        return cmd_impact(args.symbol, max_depth=args.depth)
     elif args.command == 'search':
         return cmd_search(args.query, top_k=args.top)
     elif args.command == 'callers':
