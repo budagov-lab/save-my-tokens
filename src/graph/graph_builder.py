@@ -1,5 +1,6 @@
 """Graph builder orchestrates parsing, indexing, and graph construction."""
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -18,6 +19,30 @@ try:
     from src.parsers.typescript_parser import TypeScriptParser
 except ImportError:
     TypeScriptParser = None  # type: ignore[name-defined]
+
+
+class _NoOpProgress:
+    """Context manager that does nothing, for Windows compatibility."""
+
+    def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        """Accept but ignore all arguments."""
+        pass
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        """No-op enter."""
+        return self
+
+    def __exit__(self, *args):  # type: ignore[no-untyped-def]
+        """No-op exit."""
+        pass
+
+    def add_task(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        """Return a dummy task ID."""
+        return 0
+
+    def update(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        """No-op update."""
+        pass
 
 
 class GraphBuilder:
@@ -40,6 +65,13 @@ class GraphBuilder:
         self.nodes: List[Node] = []
         self.edges: List[Tuple[Edge, str, str]] = []
         logger.info(f"Initialized GraphBuilder for {base_path}")
+
+    @staticmethod
+    def _progress_context(*args, **kwargs):  # type: ignore[no-untyped-def]
+        """Return appropriate progress context (handles Windows Unicode issue)."""
+        if os.name == 'nt':
+            return _NoOpProgress(*args, **kwargs)
+        return Progress(*args, **kwargs)
 
     def build(self, build_embeddings: bool = True) -> None:
         """Execute the full graph construction pipeline.
@@ -87,7 +119,7 @@ class GraphBuilder:
                     all_files.append((file_path, "typescript"))
 
         # Parse with progress bar
-        with Progress(
+        with self._progress_context(
             SpinnerColumn(),
             TextColumn("[bold blue]Parsing files"),
             BarColumn(),
@@ -114,7 +146,7 @@ class GraphBuilder:
         """Create nodes from symbols in the index."""
         symbols = self.symbol_index.get_all()
 
-        with Progress(
+        with self._progress_context(
             SpinnerColumn(),
             TextColumn("[bold green]Creating nodes"),
             BarColumn(),
@@ -164,7 +196,7 @@ class GraphBuilder:
         file_cache: Dict[str, Tuple[bytes, any]] = {}  # type: ignore[type-arg]
 
         symbols = self.symbol_index.get_all()
-        with Progress(
+        with self._progress_context(
             SpinnerColumn(),
             TextColumn("[bold yellow]Creating edges"),
             BarColumn(),
