@@ -12,7 +12,7 @@ from src.parsers.symbol import Symbol
 class BaseParser(ABC):
     """Abstract base class for language-specific parsers."""
 
-    LANGUAGE: str = ""  # Set in subclass (e.g., "python", "go", "rust")
+    LANGUAGE: str = ""  # Set in subclass (e.g., "python", "typescript")
     EXTENSIONS: List[str] = []  # Supported file extensions (e.g., [".py"])
 
     def __init__(self, base_path: str = ""):
@@ -51,6 +51,73 @@ class BaseParser(ABC):
             List of symbols
         """
         pass
+
+    @abstractmethod
+    def _get_docstring(self, node, source_code: bytes) -> Optional[str]:
+        """Extract docstring/JSDoc for a node.
+
+        Language-specific implementation: Python uses triple-quotes,
+        TypeScript uses JSDoc comments, etc.
+
+        Args:
+            node: Tree-sitter node
+            source_code: Source code bytes
+
+        Returns:
+            Docstring text, or None if not found
+        """
+        pass
+
+    def _get_child_text(
+        self, node, field_name: str, source_code: bytes
+    ) -> Optional[str]:
+        """Get text of child node by field name.
+
+        Args:
+            node: Tree-sitter node
+            field_name: Field name (e.g., "name")
+            source_code: Source code bytes
+
+        Returns:
+            Child node text, or None if not found
+        """
+        child = node.child_by_field_name(field_name)
+        if child:
+            return source_code[child.start_byte : child.end_byte].decode("utf-8")
+        return None
+
+    def _make_symbol(
+        self,
+        node,
+        symbol_type: str,
+        source_code: bytes,
+        file_path: str,
+        parent: Optional[str] = None,
+    ) -> Symbol:
+        """Create a Symbol from a tree-sitter node.
+
+        Args:
+            node: Tree-sitter node
+            symbol_type: Symbol type (e.g., "function", "class")
+            source_code: Source code bytes
+            file_path: File path
+            parent: Parent symbol name (e.g., class name for methods)
+
+        Returns:
+            Symbol object
+        """
+        name = self._get_child_text(node, "name", source_code)
+        docstring = self._get_docstring(node, source_code)
+
+        return Symbol(
+            name=name,
+            type=symbol_type,
+            file=file_path,
+            line=node.start_point[0] + 1,
+            column=node.start_point[1],
+            docstring=docstring,
+            parent=parent,
+        )
 
     def supports_file(self, file_path: str) -> bool:
         """Check if this parser supports the file.

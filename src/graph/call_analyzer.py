@@ -19,7 +19,43 @@ class CallAnalyzer:
         """
         self.symbol_index = symbol_index
 
-    def extract_calls_python(self, function_node: TSNode, source_code: bytes, file_path: str) -> List[str]:
+    def extract_calls(
+        self,
+        function_node: TSNode,
+        source_code: bytes,
+        file_path: str,
+        body_node_type: str,
+        call_node_type: str,
+    ) -> List[str]:
+        """Unified call extraction for any language.
+
+        Args:
+            function_node: Tree-sitter node for function definition
+            source_code: Source code bytes
+            file_path: File path of the source
+            body_node_type: Type of body node ("block" for Python, "statement_block" for TypeScript)
+            call_node_type: Type of call node ("call" for Python, "call_expression" for TypeScript)
+
+        Returns:
+            List of called function node_ids
+        """
+        calls: Set[str] = set()
+
+        # Find function body
+        body_node = next(
+            (c for c in function_node.children if c.type == body_node_type), None
+        )
+
+        if not body_node:
+            return []
+
+        # Recursively find all call nodes
+        self._find_call_nodes(body_node, source_code, file_path, call_node_type, calls)
+        return list(calls)
+
+    def extract_calls_python(
+        self, function_node: TSNode, source_code: bytes, file_path: str
+    ) -> List[str]:
         """Extract function calls from a Python function body.
 
         Args:
@@ -30,47 +66,13 @@ class CallAnalyzer:
         Returns:
             List of called function node_ids
         """
-        calls: Set[str] = set()
+        return self.extract_calls(
+            function_node, source_code, file_path, "block", "call"
+        )
 
-        # Find function body (block node after the function def)
-        body_node = None
-        for child in function_node.children:
-            if child.type == "block":
-                body_node = child
-                break
-
-        if not body_node:
-            return []
-
-        # Recursively find all call nodes
-        self._find_call_nodes_python(body_node, source_code, file_path, calls)
-        return list(calls)
-
-    def _find_call_nodes_python(
-        self, node: TSNode, source_code: bytes, file_path: str, calls: Set[str]
-    ) -> None:
-        """Recursively find call nodes in Python AST.
-
-        Args:
-            node: Current tree-sitter node
-            source_code: Source code bytes
-            file_path: File path of source
-            calls: Set to accumulate found calls
-        """
-        if node.type == "call":
-            # Extract the function name being called
-            func_name = source_code[node.child_by_field_name("function").start_byte : node.child_by_field_name("function").end_byte].decode("utf-8")
-
-            # Simple heuristic: resolve name to symbol
-            resolved = self._resolve_call_name(func_name, file_path)
-            if resolved:
-                calls.add(resolved)
-
-        # Recurse into children
-        for child in node.children:
-            self._find_call_nodes_python(child, source_code, file_path, calls)
-
-    def extract_calls_typescript(self, function_node: TSNode, source_code: bytes, file_path: str) -> List[str]:
+    def extract_calls_typescript(
+        self, function_node: TSNode, source_code: bytes, file_path: str
+    ) -> List[str]:
         """Extract function calls from a TypeScript/JavaScript function body.
 
         Args:
@@ -81,26 +83,48 @@ class CallAnalyzer:
         Returns:
             List of called function node_ids
         """
-        calls: Set[str] = set()
+        return self.extract_calls(
+            function_node, source_code, file_path, "statement_block", "call_expression"
+        )
 
-        # Find function body (statement_block for TypeScript)
-        body_node = None
-        for child in function_node.children:
-            if child.type == "statement_block":
-                body_node = child
-                break
+    def _find_call_nodes(
+        self,
+        node: TSNode,
+        source_code: bytes,
+        file_path: str,
+        call_node_type: str,
+        calls: Set[str],
+    ) -> None:
+        """Recursively find call nodes in AST (unified for all languages).
 
-        if not body_node:
-            return []
+        Args:
+            node: Current tree-sitter node
+            source_code: Source code bytes
+            file_path: File path of source
+            call_node_type: Type of call node ("call" or "call_expression")
+            calls: Set to accumulate found calls
+        """
+        if node.type == call_node_type:
+            # Extract the function name being called
+            func_node = node.child_by_field_name("function")
+            if func_node:
+                func_name = source_code[
+                    func_node.start_byte : func_node.end_byte
+                ].decode("utf-8")
+                resolved = self._resolve_call_name(func_name, file_path)
+                if resolved:
+                    calls.add(resolved)
 
-        # Recursively find all call nodes
-        self._find_call_nodes_typescript(body_node, source_code, file_path, calls)
-        return list(calls)
+        # Recurse into children
+        for child in node.children:
+            self._find_call_nodes(child, source_code, file_path, call_node_type, calls)
 
-    def _find_call_nodes_typescript(
+    def _find_call_nodes_python(
         self, node: TSNode, source_code: bytes, file_path: str, calls: Set[str]
     ) -> None:
-        """Recursively find call nodes in TypeScript AST.
+        """Recursively find call nodes in Python AST.
+
+        Wrapper around _find_call_nodes() for backward compatibility.
 
         Args:
             node: Current tree-sitter node
@@ -108,18 +132,22 @@ class CallAnalyzer:
             file_path: File path of source
             calls: Set to accumulate found calls
         """
-        if node.type == "call_expression":
-            # Extract the function name being called
-            func_node = node.child_by_field_name("function")
-            if func_node:
-                func_name = source_code[func_node.start_byte : func_node.end_byte].decode("utf-8")
-                resolved = self._resolve_call_name(func_name, file_path)
-                if resolved:
-                    calls.add(resolved)
+        self._find_call_nodes(node, source_code, file_path, "call", calls)
 
-        # Recurse into children
-        for child in node.children:
-            self._find_call_nodes_typescript(child, source_code, file_path, calls)
+    def _find_call_nodes_typescript(
+        self, node: TSNode, source_code: bytes, file_path: str, calls: Set[str]
+    ) -> None:
+        """Recursively find call nodes in TypeScript AST.
+
+        Wrapper around _find_call_nodes() for backward compatibility.
+
+        Args:
+            node: Current tree-sitter node
+            source_code: Source code bytes
+            file_path: File path of source
+            calls: Set to accumulate found calls
+        """
+        self._find_call_nodes(node, source_code, file_path, "call_expression", calls)
 
     def _resolve_call_name(self, call_name: str, file_path: str) -> Optional[str]:
         """Resolve a called function name to a node_id.

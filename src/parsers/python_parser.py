@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from tree_sitter import Language, Parser
 
+from src.parsers.base_parser import BaseParser
 from src.parsers.symbol import Symbol
 from src.parsers.import_resolver import ImportResolver
 
@@ -17,8 +18,11 @@ except ImportError:
     raise ImportError("tree-sitter-python not installed. Run: pip install tree-sitter-python")
 
 
-class PythonParser:
+class PythonParser(BaseParser):
     """Extract symbols from Python source code using Tree-sitter."""
+
+    LANGUAGE = "python"
+    EXTENSIONS = [".py"]
 
     def __init__(self, base_path: Optional[str] = None):
         """Initialize parser.
@@ -26,6 +30,7 @@ class PythonParser:
         Args:
             base_path: Root directory for resolving relative imports
         """
+        super().__init__(base_path or "")
         self.parser = Parser()
         self.parser.language = PYTHON_LANGUAGE
         self.import_resolver = ImportResolver(base_path)
@@ -48,6 +53,16 @@ class PythonParser:
         )
 
         return symbols
+
+    def _extract_symbols(
+        self, source_code: str, file_path: str
+    ) -> List[Symbol]:
+        """Extract symbols from source code (unused, provided for BaseParser compatibility).
+
+        The PythonParser uses parse_file() which directly calls _extract_from_node()
+        instead of this method. This is kept for abstract method implementation.
+        """
+        return []
 
     def _extract_from_node(
         self,
@@ -91,18 +106,7 @@ class PythonParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract function definition."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_docstring(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="function",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "function", source_code, file_path, parent)
 
     def _extract_class(
         self,
@@ -112,18 +116,7 @@ class PythonParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract class definition."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_docstring(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="class",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "class", source_code, file_path, parent)
 
     def _extract_class_members(
         self,
@@ -236,8 +229,12 @@ class PythonParser:
 
         return imports
 
-    def _extract_docstring(self, node, source_code: bytes) -> Optional[str]:
-        """Extract docstring from function/class."""
+    def _get_docstring(self, node, source_code: bytes) -> Optional[str]:
+        """Extract docstring from function/class.
+
+        Overrides BaseParser._get_docstring() with Python-specific implementation.
+        Docstring is first string literal in the body.
+        """
         # Docstring is first string literal in the body
         for child in node.children:
             if child.type == "block":
@@ -251,13 +248,4 @@ class PythonParser:
                                 ].decode("utf-8")
                                 # Remove quotes
                                 return docstring.strip('\'"')
-        return None
-
-    def _get_child_text(
-        self, node, field_name: str, source_code: bytes
-    ) -> Optional[str]:
-        """Get text of child node by field name."""
-        child = node.child_by_field_name(field_name)
-        if child:
-            return source_code[child.start_byte : child.end_byte].decode("utf-8")
         return None

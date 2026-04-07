@@ -256,10 +256,11 @@ class GraphBuilder:
                             continue
 
                         # Extract calls
-                        if ext == ".py":
-                            callee_ids = self.call_analyzer.extract_calls_python(func_node, source_bytes, file_path)
-                        else:
-                            callee_ids = self.call_analyzer.extract_calls_typescript(func_node, source_bytes, file_path)
+                        body_type = "block" if ext == ".py" else "statement_block"
+                        call_type = "call" if ext == ".py" else "call_expression"
+                        callee_ids = self.call_analyzer.extract_calls(
+                            func_node, source_bytes, file_path, body_type, call_type
+                        )
 
                         # Create CALLS edges
                         for callee_id in callee_ids:

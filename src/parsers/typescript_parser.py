@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from tree_sitter import Language, Parser
 
+from src.parsers.base_parser import BaseParser
 from src.parsers.symbol import Symbol
 from src.parsers.import_resolver import ImportResolver
 
@@ -19,8 +20,11 @@ except ImportError:
     )
 
 
-class TypeScriptParser:
+class TypeScriptParser(BaseParser):
     """Extract symbols from TypeScript source code using Tree-sitter."""
+
+    LANGUAGE = "typescript"
+    EXTENSIONS = [".ts", ".tsx"]
 
     def __init__(self, base_path: Optional[str] = None):
         """Initialize parser.
@@ -28,6 +32,7 @@ class TypeScriptParser:
         Args:
             base_path: Root directory for resolving relative imports
         """
+        super().__init__(base_path or "")
         self.parser = Parser()
         self.parser.language = TYPESCRIPT_LANGUAGE
         self.import_resolver = ImportResolver(base_path)
@@ -56,6 +61,16 @@ class TypeScriptParser:
         )
 
         return symbols
+
+    def _extract_symbols(
+        self, source_code: str, file_path: str
+    ) -> List[Symbol]:
+        """Extract symbols from source code (unused, provided for BaseParser compatibility).
+
+        The TypeScriptParser uses parse_file() which directly calls _extract_from_node()
+        instead of this method. This is kept for abstract method implementation.
+        """
+        return []
 
     def _extract_from_node(
         self,
@@ -110,18 +125,7 @@ class TypeScriptParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract function declaration."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_jsdoc(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="function",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "function", source_code, file_path, parent)
 
     def _extract_class(
         self,
@@ -131,18 +135,7 @@ class TypeScriptParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract class declaration."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_jsdoc(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="class",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "class", source_code, file_path, parent)
 
     def _extract_interface(
         self,
@@ -152,18 +145,7 @@ class TypeScriptParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract interface declaration."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_jsdoc(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="interface",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "interface", source_code, file_path, parent)
 
     def _extract_type_alias(
         self,
@@ -173,18 +155,7 @@ class TypeScriptParser:
         parent: Optional[str] = None,
     ) -> Symbol:
         """Extract type alias declaration."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_jsdoc(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="type",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=parent,
-        )
+        return self._make_symbol(node, "type", source_code, file_path, parent)
 
     def _extract_class_members(
         self,
@@ -213,18 +184,7 @@ class TypeScriptParser:
         class_name: str,
     ) -> Symbol:
         """Extract method definition."""
-        name = self._get_child_text(node, "name", source_code)
-        docstring = self._extract_jsdoc(node, source_code)
-
-        return Symbol(
-            name=name,
-            type="function",
-            file=file_path,
-            line=node.start_point[0] + 1,
-            column=node.start_point[1],
-            docstring=docstring,
-            parent=class_name,
-        )
+        return self._make_symbol(node, "function", source_code, file_path, class_name)
 
     def _extract_nested(
         self,
@@ -305,8 +265,12 @@ class TypeScriptParser:
 
         return imports
 
-    def _extract_jsdoc(self, node, source_code: bytes) -> Optional[str]:
-        """Extract JSDoc comment before node."""
+    def _get_docstring(self, node, source_code: bytes) -> Optional[str]:
+        """Extract JSDoc comment before node.
+
+        Overrides BaseParser._get_docstring() with TypeScript-specific implementation.
+        Looks for JSDoc/comment nodes before the symbol.
+        """
         # Look for comment nodes before this node
         if node.prev_sibling and node.prev_sibling.type in (
             "comment",
@@ -317,13 +281,4 @@ class TypeScriptParser:
             ].decode("utf-8")
             # Remove comment markers
             return comment.replace("//", "").replace("/*", "").replace("*/", "").strip()
-        return None
-
-    def _get_child_text(
-        self, node, field_name: str, source_code: bytes
-    ) -> Optional[str]:
-        """Get text of child node by field name."""
-        child = node.child_by_field_name(field_name)
-        if child:
-            return source_code[child.start_byte : child.end_byte].decode("utf-8")
         return None

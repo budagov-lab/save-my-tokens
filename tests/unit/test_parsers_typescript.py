@@ -69,6 +69,7 @@ export function multiply(a: number, b: number): number {
 }
 """
         )
+        f.flush()
         yield f.name
     Path(f.name).unlink()
 
