@@ -954,7 +954,72 @@ For more: `smt --help` or `cat .claude/TOOLS.md`
     print("  .claude/SETUP.md       [OK]")
 
     # ------------------------------------------------------------------
-    # 2.6. Append SMT hint to README.md (if exists)
+    # 2.7. .claude/AGENT_INSTRUCTIONS.md — SMT-First tool hierarchy for agents
+    # ------------------------------------------------------------------
+    agent_instructions_md = claude_dir / 'AGENT_INSTRUCTIONS.md'
+    agent_instructions_content = """\
+# SMT-First Agent Instruction Pattern
+
+When agents are spawned in this codebase, they should prefer semantic tools over raw file exploration.
+
+## Tool Hierarchy (in order of preference)
+
+### Tier 1: Semantic Tools (Use FIRST)
+- `smt context <symbol>` — Get function + dependencies + callers
+- `smt search "<query>"` — Find related code by semantic meaning
+- `smt impact <symbol>` — Analyze breaking changes
+
+### Tier 2: Pattern Tools (Use for validation)
+- `Grep(pattern)` — Verify SMT results, exact matches
+- `Glob(pattern)` — List files by pattern
+
+### Tier 3: File Operations (Use when path known)
+- `Read(file)` — Examine full file (only after SMT/Grep locate it)
+- `Edit(file)` — Make changes
+
+### Tier 4: Shell (Avoid)
+- `Bash` — Only when no other tool applies
+
+## Decision Rules
+
+| Query | Use | Why |
+|-------|-----|-----|
+| "Find X" / "Where is X" | smt search / smt context | Semantic understanding |
+| "Does X call Y?" | smt impact | Built-in caller graph |
+| "Verify location" | Grep | Fast pattern validation |
+| "Show me code" | Read | Only after SMT locates it |
+
+## Anti-Patterns (DO NOT)
+
+❌ Use Grep for exploratory queries (SMT is 10x more efficient)
+❌ Read entire files without SMT first (wastes 100+ tokens)
+❌ Use Bash find/grep (SMT already indexed everything)
+❌ Iterate files manually (use smt search once)
+
+## Token Savings
+
+- SMT-first approach: 200-300 tokens for architecture understanding
+- Raw file reading: 500-1000+ tokens for same understanding
+- **Savings: 60-80% token reduction**
+
+## Quick Start
+
+```bash
+smt status              # Verify graph is ready
+smt search "pattern"    # Exploratory query
+smt context Symbol      # Dependency analysis
+Grep(identifier)        # Verification only
+Read(file)              # Final inspection
+```
+
+For more: `smt --help` or `cat .claude/SETUP.md`
+"""
+    with open(agent_instructions_md, 'w', encoding='utf-8') as f:
+        f.write(agent_instructions_content)
+    print("  .claude/AGENT_INSTRUCTIONS.md [OK]")
+
+    # ------------------------------------------------------------------
+    # 2.8. Append SMT hint to README.md (if exists)
     # ------------------------------------------------------------------
     readme_file = target_dir / 'README.md'
     if readme_file.exists():
@@ -1001,6 +1066,16 @@ smt build       # build if empty
 smt diff        # sync if stale after recent commits
 ```
 
+### Agent Tool Hierarchy
+
+**For spawned agents/subagents**, see `.claude/AGENT_INSTRUCTIONS.md` for the tool priority system:
+1. **Tier 1 (SMT)** — Use first: `smt context`, `smt search`, `smt impact`
+2. **Tier 2 (Pattern)** — Use for validation: `Grep`, `Glob`
+3. **Tier 3 (File)** — Use when path known: `Read`, `Edit`
+4. **Tier 4 (Shell)** — Avoid: `Bash`
+
+This hierarchy is **mandatory** for all code exploration in this repository.
+
 ### When to read files directly
 
 Only read a file when:
@@ -1011,6 +1086,10 @@ Only read a file when:
 
 SMT is installed at: `{SMT_DIR}`
 Neo4j browser: http://localhost:7474
+
+---
+
+See also: `.claude/SETUP.md` (quick reference), `.claude/AGENT_INSTRUCTIONS.md` (tool hierarchy)
 """
         with open(claude_md, 'w', encoding='utf-8') as f:
             f.write(claude_md_content)
