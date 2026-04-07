@@ -246,8 +246,10 @@ def _resolve_project_path() -> Path:
     return cwd
 
 
-def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter: str | None = None) -> int:
+def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
+                file_filter: str | None = None, compress: bool = False) -> int:
     from src.graph.cycle_detector import detect_cycles
+    from src.graph.compressor import compress_subgraph, format_compression_stats
 
     if not _require_git(_resolve_project_path()):
         return 1
@@ -281,6 +283,24 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
         node_names = [n["name"] for n in nodes]
         edge_tuples = [(e["src"], e["dst"]) for e in edges]
         acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
+
+        # Track original sizes for compression stats
+        original_node_count = len(nodes)
+        original_edge_count = len(edges)
+
+        # Apply compression if requested
+        compression_result = None
+        if compress:
+            cycle_members = {m for cg in cycle_groups for m in cg.members}
+            compression_result = compress_subgraph(symbol, node_names, edge_tuples, cycle_members)
+            # Replace nodes and edges with compressed versions
+            nodes = [n for n in nodes if n["name"] in compression_result.nodes]
+            edges = [(e["src"], e["dst"]) for e in edges
+                    if (e["src"], e["dst"]) in compression_result.edges]
+            # Re-detect cycles on compressed graph
+            node_names = [n["name"] for n in nodes]
+            edge_tuples = [(e[0], e[1]) for e in edges]
+            acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
 
         # Build sets for quick lookup
         acyclic_set = set(acyclic_nodes)
@@ -323,8 +343,16 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
 
         # Print metadata footer
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
-        print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
-              f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
+
+        if compression_result and compression_result.bridges:
+            # Show compression stats
+            compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                       compression_result)
+            print(f"\n  context: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
+            print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+        else:
+            print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
+                  f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
         # Print validation status
         try:
@@ -473,9 +501,10 @@ def _compute_depths(
     return depths
 
 
-def cmd_impact(symbol: str, max_depth: int = 3) -> int:
+def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
     """Impact analysis — what breaks if I change this symbol?"""
     from src.graph.cycle_detector import detect_cycles
+    from src.graph.compressor import compress_subgraph, format_compression_stats
 
     if not _require_git(_resolve_project_path()):
         return 1
@@ -526,10 +555,38 @@ def cmd_impact(symbol: str, max_depth: int = 3) -> int:
                 file_base = Path(caller_node.get("file", "?")).name if caller_node else "?"
                 print(f"    {caller}  ({file_base})")
 
+        # Track original sizes for compression stats
+        original_node_count = len(nodes)
+        original_edge_count = len(edges)
+
         # Detect cycles in the impact set
         node_names = [n["name"] for n in nodes]
         edge_tuples = [(e["src"], e["dst"]) for e in edges]
         acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
+
+        # Apply compression if requested
+        compression_result = None
+        if compress:
+            cycle_members = {m for cg in cycle_groups for m in cg.members}
+            compression_result = compress_subgraph(symbol, node_names, edge_tuples, cycle_members)
+            # Replace nodes and edges with compressed versions
+            nodes = [n for n in nodes if n["name"] in compression_result.nodes]
+            edges = [(e["src"], e["dst"]) for e in edges
+                    if (e["src"], e["dst"]) in compression_result.edges]
+            # Recompute callers_by_depth on compressed graph
+            depths = _compute_depths(root.get('name', symbol), edges)
+            callers_by_depth = {}
+            for n in nodes:
+                node_name = n["name"]
+                if node_name != symbol:
+                    d = depths.get(node_name, max_depth + 1)
+                    if d not in callers_by_depth:
+                        callers_by_depth[d] = []
+                    callers_by_depth[d].append(node_name)
+            # Re-detect cycles
+            node_names = [n["name"] for n in nodes]
+            edge_tuples = [(e[0], e[1]) for e in edges]
+            acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
 
         if cycle_groups:
             for cg in cycle_groups:
@@ -541,8 +598,16 @@ def cmd_impact(symbol: str, max_depth: int = 3) -> int:
 
         # Print metadata footer
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
-        print(f"\n  impact: nodes={len(nodes)} depth={len(callers_by_depth)} "
-              f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
+
+        if compression_result and compression_result.bridges:
+            # Show compression stats
+            compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                       compression_result)
+            print(f"\n  impact: {compression_line} depth={len(callers_by_depth)} cycles={len(cycle_groups)} ~tokens={token_estimate}")
+            print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+        else:
+            print(f"\n  impact: nodes={len(nodes)} depth={len(callers_by_depth)} "
+                  f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
         # Print validation status
         try:
@@ -1079,6 +1144,7 @@ commands:
     p_ctx.add_argument('--depth', type=int, default=1)
     p_ctx.add_argument('--callers', action='store_true')
     p_ctx.add_argument('--file', default=None, help='Filter by file path (substring match)')
+    p_ctx.add_argument('--compress', action='store_true', help='Remove bridge functions to reduce tokens')
 
     # definition
     p_def = sub.add_parser('definition', help='Symbol definition (fast, 1-hop)')
@@ -1089,6 +1155,7 @@ commands:
     p_impact = sub.add_parser('impact', help='Impact analysis: what breaks if I change this?')
     p_impact.add_argument('symbol')
     p_impact.add_argument('--depth', type=int, default=3, help='Maximum depth for impact traversal')
+    p_impact.add_argument('--compress', action='store_true', help='Remove bridge functions to reduce tokens')
 
     # search
     p_search = sub.add_parser('search', help='Semantic search')
@@ -1130,11 +1197,12 @@ commands:
     if args.command == 'build':
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
     elif args.command == 'context':
-        return cmd_context(args.symbol, depth=args.depth, callers=args.callers, file_filter=args.file)
+        return cmd_context(args.symbol, depth=args.depth, callers=args.callers,
+                          file_filter=args.file, compress=args.compress)
     elif args.command == 'definition':
         return cmd_definition(args.symbol, file_filter=args.file)
     elif args.command == 'impact':
-        return cmd_impact(args.symbol, max_depth=args.depth)
+        return cmd_impact(args.symbol, max_depth=args.depth, compress=args.compress)
     elif args.command == 'search':
         return cmd_search(args.query, top_k=args.top)
     elif args.command == 'callers':
