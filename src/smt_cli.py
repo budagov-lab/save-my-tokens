@@ -954,6 +954,24 @@ For more: `smt --help` or `cat .claude/TOOLS.md`
     print("  .claude/SETUP.md       [OK]")
 
     # ------------------------------------------------------------------
+    # 2.6. Append SMT hint to README.md (if exists)
+    # ------------------------------------------------------------------
+    readme_file = target_dir / 'README.md'
+    if readme_file.exists():
+        try:
+            readme_content = readme_file.read_text(encoding='utf-8')
+            smt_hint = "\n## Code Analysis\n\nThis repository is indexed with **SMT** (save-my-tokens). Use `smt --help` to explore code structure efficiently.\n"
+            if 'smt --help' not in readme_content and 'save-my-tokens' not in readme_content:
+                readme_file.write_text(readme_content + smt_hint, encoding='utf-8')
+                print("  README.md              [OK] — SMT hint appended")
+            else:
+                print("  README.md              [skipped — SMT hint already present]")
+        except Exception as e:
+            print(f"  README.md              [WARN] — Could not append hint: {e}")
+    else:
+        print("  README.md              [skipped — not found]")
+
+    # ------------------------------------------------------------------
     # 3. CLAUDE.md — tells Claude how to work in this project
     # ------------------------------------------------------------------
     claude_md = target_dir / 'CLAUDE.md'
