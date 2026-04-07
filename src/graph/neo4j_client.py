@@ -1,6 +1,6 @@
 """Neo4j database client and query interface."""
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from neo4j import GraphDatabase, Session
@@ -205,6 +205,72 @@ class Neo4jClient:
             edge_count = edge_result.single()["count"]
 
         return {"node_count": node_count, "edge_count": edge_count}
+
+    def get_bounded_subgraph(self, name: str, max_depth: int = 3) -> Dict[str, Any]:
+        """Get all nodes and directed CALLS edges reachable from a symbol within max_depth.
+
+        Args:
+            name: Symbol name to start from
+            max_depth: Maximum hop distance (1-10 recommended)
+
+        Returns:
+            {
+                "root": {node properties dict},
+                "nodes": [{node_id, name, file, line, labels}, ...],
+                "edges": [{src: name, dst: name}, ...],
+                "depth_reached": actual max depth traversed
+            }
+
+        Returns empty dict if symbol not found.
+        """
+        with self.driver.session() as session:
+            # Query 1: Find root node and all reachable nodes via directed CALLS edges
+            query1 = f"""
+            MATCH (start {{name: $name}})
+            OPTIONAL MATCH path = (start)-[:CALLS*1..{max_depth}]->(reached)
+            WITH start, collect(DISTINCT reached) AS reachable
+            WITH [start] + reachable AS all_nodes
+            UNWIND all_nodes AS n
+            RETURN DISTINCT n.node_id AS node_id, n.name AS name,
+                   n.file AS file, n.line AS line, labels(n) AS labels
+            ORDER BY n.name
+            """
+            result1 = session.run(query1, name=name)
+            rows1 = list(result1)
+
+            if not rows1:
+                logger.debug(f"Symbol '{name}' not found in graph")
+                return {}
+
+            # Extract root node (first row matches root by definition)
+            root_dict = dict(rows1[0])
+            root_dict["labels"] = root_dict.get("labels", [])
+
+            # Collect all node_ids for edge filtering
+            node_ids = {row["node_id"] for row in rows1}
+            nodes = [dict(row) for row in rows1]
+
+            # Query 2: Get CALLS edges only between nodes in this subgraph
+            query2 = """
+            MATCH (a)-[:CALLS]->(b)
+            WHERE a.node_id IN $node_ids AND b.node_id IN $node_ids
+            RETURN a.name AS src, b.name AS dst
+            ORDER BY src, dst
+            """
+            result2 = session.run(query2, node_ids=list(node_ids))
+            edges = [dict(row) for row in result2]
+
+            logger.debug(
+                f"Bounded subgraph for '{name}': {len(nodes)} nodes, "
+                f"{len(edges)} edges, depth={max_depth}"
+            )
+
+            return {
+                "root": root_dict,
+                "nodes": nodes,
+                "edges": edges,
+                "depth_reached": max_depth,
+            }
 
     def begin_transaction(self):
         """Open a session and begin an explicit transaction.

@@ -214,60 +214,70 @@ def _resolve_project_path() -> Path:
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter: str | None = None) -> int:
     settings, Neo4jClient, *_ = _get_services()
+    from src.graph.cycle_detector import detect_cycles
 
     if not _require_git(_resolve_project_path()):
         return 1
 
     try:
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-        with client.driver.session() as session:
-            # Find the symbol, prioritizing by type (Function > Class > other)
-            # and optionally filtering by file
-            if file_filter:
-                query = """
-                    MATCH (n {name: $name})
-                    WHERE n.file CONTAINS $file
-                    RETURN n
-                    LIMIT 1
-                """
-                node = session.run(query, name=symbol, file=file_filter).single()
-            else:
-                query = """
-                    MATCH (n {name: $name})
-                    RETURN n,
-                           CASE WHEN n:Function THEN 0
-                                WHEN n:Class THEN 1
-                                ELSE 2 END as priority
-                    ORDER BY priority
-                    LIMIT 1
-                """
-                node = session.run(query, name=symbol).single()
 
-            if not node:
-                print(f"Symbol '{symbol}' not found in graph.")
-                client.driver.close()
-                return 1
+        # Get bounded subgraph using depth parameter (now actually used)
+        max_depth = max(1, depth)  # Ensure at least 1
+        subgraph = client.get_bounded_subgraph(symbol, max_depth=max_depth)
 
-            n = node['n']
-            print(f"\n{n.get('name')}  [{', '.join(n.labels)}]")
-            print(f"  file: {n.get('file', '?')}:{n.get('line', '?')}")
-            if n.get('signature'):
-                print(f"  sig:  {n.get('signature')}")
-            if n.get('docstring'):
-                print(f"  doc:  {n.get('docstring')[:120]}")
+        if not subgraph:
+            print(f"Symbol '{symbol}' not found in graph.")
+            client.driver.close()
+            return 1
 
-            # Dependencies (what this calls)
-            deps = session.run(
-                "MATCH (n {name: $name})-[:CALLS]->(dep) RETURN dep.name AS name, dep.file AS file",
-                name=symbol
-            ).data()
-            if deps:
-                print(f"\n  calls ({len(deps)}):")
-                for d in deps:
-                    print(f"    {d['name']}  ({d.get('file', '?')})")
+        root = subgraph["root"]
+        nodes = subgraph["nodes"]
+        edges = subgraph["edges"]
 
-            # Callers
-            if callers or depth > 1:
+        # Print header (definition)
+        labels = root.get("labels", [])
+        print(f"\n{root.get('name')}  [{', '.join(labels)}]")
+        print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
+        if root.get("signature"):
+            print(f"  sig:  {root.get('signature')}")
+        if root.get("docstring"):
+            print(f"  doc:  {root.get('docstring')[:120]}")
+
+        # Detect cycles in the subgraph
+        node_names = [n["name"] for n in nodes]
+        edge_tuples = [(e["src"], e["dst"]) for e in edges]
+        acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
+
+        # Build sets for quick lookup
+        acyclic_set = set(acyclic_nodes)
+        cyclic_nodes_set = {n for cg in cycle_groups for n in cg.members}
+
+        # Print calls (outbound edges, excluding those in cycles)
+        outbound_calls = [e for e in edges if e["src"] == symbol]
+        if outbound_calls:
+            print(f"\n  calls ({len(outbound_calls)}):")
+            for edge in outbound_calls:
+                target = edge["dst"]
+                # Find target node for file info
+                target_node = next((n for n in nodes if n["name"] == target), None)
+                file_str = target_node.get("file", "?") if target_node else "?"
+                file_base = Path(file_str).name if file_str != "?" else "?"
+                print(f"    {target}  ({file_base})")
+
+        # Print cycles
+        if cycle_groups:
+            for cg in cycle_groups:
+                # Find a representative edge to show the cycle direction
+                cycle_str = " → ".join(cg.members[:3])  # Show first 3 for readability
+                if len(cg.members) > 3:
+                    cycle_str += f" → ... ({len(cg.members)} total)"
+                print(f"\n  [Cycle: {cycle_str}]")
+                print(f"    {len(cg.members)} functions collapsed")
+
+        # Callers (inbound edges, 1 hop only)
+        if callers or depth > 1:
+            with client.driver.session() as session:
                 callers_data = session.run(
                     "MATCH (caller)-[:CALLS]->(n {name: $name}) RETURN caller.name AS name, caller.file AS file",
                     name=symbol
@@ -275,12 +285,20 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
                 if callers_data:
                     print(f"\n  callers ({len(callers_data)}):")
                     for c in callers_data:
-                        print(f"    {c['name']}  ({c.get('file', '?')})")
+                        file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
+                        print(f"    {c['name']}  ({file_base})")
+
+        # Print metadata footer
+        token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
+        print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
+              f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
         client.driver.close()
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
+        import traceback
+        logger.error(f"cmd_context error: {traceback.format_exc()}")
         return 1
 
 
