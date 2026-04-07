@@ -44,8 +44,16 @@ class Neo4jClient:
             with self.driver.session() as session:
                 session.run("RETURN 1")
         except Exception as e:
-            logger.error(f"Failed to connect to Neo4j: {e}")
-            raise
+            # Don't fail on database creation for community edition
+            # (which doesn't support CREATE DATABASE)
+            logger.warning(f"Database verification: {e}")
+            # Still test connection with minimal query
+            try:
+                with self.driver.session() as session:
+                    session.run("RETURN 1")
+            except Exception as e2:
+                logger.error(f"Failed to connect to Neo4j: {e2}")
+                raise
 
     def close(self) -> None:
         """Close database connection."""

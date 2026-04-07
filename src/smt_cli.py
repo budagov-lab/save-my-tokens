@@ -29,7 +29,7 @@ import argparse
 import subprocess
 import stat
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from loguru import logger
 
@@ -39,6 +39,27 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 SMT_DIR = Path(__file__).parent.parent.resolve()
+
+# Global Neo4j client for connection pooling across CLI commands
+_neo4j_client: Optional[Any] = None
+
+
+def _get_neo4j_client():
+    """Get or create singleton Neo4j client (connection pooling)."""
+    global _neo4j_client
+    if _neo4j_client is None:
+        from src.config import settings
+        from src.graph.neo4j_client import Neo4jClient
+        _neo4j_client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+    return _neo4j_client
+
+
+def _close_neo4j_client():
+    """Close the global client on exit."""
+    global _neo4j_client
+    if _neo4j_client:
+        _neo4j_client.driver.close()
+        _neo4j_client = None
 
 
 def _get_services():
@@ -215,14 +236,13 @@ def _resolve_project_path() -> Path:
 
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter: str | None = None) -> int:
-    settings, Neo4jClient, *_ = _get_services()
     from src.graph.cycle_detector import detect_cycles
 
     if not _require_git(_resolve_project_path()):
         return 1
 
     try:
-        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        client = _get_neo4j_client()
 
         # Get bounded subgraph using depth parameter (now actually used)
         max_depth = max(1, depth)  # Ensure at least 1
@@ -295,7 +315,6 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False, file_filter:
         print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
               f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
-        client.driver.close()
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -318,13 +337,11 @@ def cmd_callers(symbol: str) -> int:
 
 def cmd_definition(symbol: str, file_filter: str | None = None) -> int:
     """Fast definition lookup — just the signature and 1-hop callees."""
-    settings, Neo4jClient, *_ = _get_services()
-
     if not _require_git(_resolve_project_path()):
         return 1
 
     try:
-        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        client = _get_neo4j_client()
 
         with client.driver.session() as session:
             # Find the symbol
@@ -373,7 +390,6 @@ def cmd_definition(symbol: str, file_filter: str | None = None) -> int:
                     file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
                     print(f"    {c['name']}  ({file_base})")
 
-        client.driver.close()
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -426,14 +442,13 @@ def _compute_depths(
 
 def cmd_impact(symbol: str, max_depth: int = 3) -> int:
     """Impact analysis — what breaks if I change this symbol?"""
-    settings, Neo4jClient, *_ = _get_services()
     from src.graph.cycle_detector import detect_cycles
 
     if not _require_git(_resolve_project_path()):
         return 1
 
     try:
-        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        client = _get_neo4j_client()
 
         # Get impact graph (reverse traversal)
         impact_set = client.get_impact_graph(symbol, max_depth=max_depth)
@@ -496,7 +511,6 @@ def cmd_impact(symbol: str, max_depth: int = 3) -> int:
         print(f"\n  impact: nodes={len(nodes)} depth={len(callers_by_depth)} "
               f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
 
-        client.driver.close()
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -1115,4 +1129,7 @@ commands:
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    finally:
+        _close_neo4j_client()

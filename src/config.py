@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     # Project Isolation
     # Neo4j database name for this project (each project gets its own database)
     # Format: project_name (lowercase, alphanumeric + underscore)
-    NEO4J_DATABASE: str = "smt_default"
+    # NOTE: Neo4j Community Edition only supports the default "neo4j" database
+    NEO4J_DATABASE: str = "neo4j"
 
     # Project paths
     PROJECT_ROOT: Path = Path(__file__).parent.parent
