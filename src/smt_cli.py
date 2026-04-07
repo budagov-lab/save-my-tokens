@@ -901,6 +901,59 @@ smt status          # confirm node count > 100
     print("  .claude/TOOLS.md       [OK]")
 
     # ------------------------------------------------------------------
+    # 2.5. .claude/SETUP.md — simple quick-start guide
+    # ------------------------------------------------------------------
+    setup_md = claude_dir / 'SETUP.md'
+    setup_content = """\
+# SMT Quick Start
+
+This repository uses **save-my-tokens (SMT)** for intelligent code analysis.
+
+## Basic Commands
+
+```bash
+smt status                       # Check graph health
+smt definition <symbol>          # What is this symbol?
+smt context <symbol>             # What code do I need to understand this?
+smt context <symbol> --depth 2   # Deeper context (dependencies)
+smt impact <symbol>              # What breaks if I change this?
+smt search "<query>"             # Semantic search
+smt callers <symbol>             # Who calls this?
+```
+
+## Why Use SMT?
+
+- **Fast** — Sub-20ms queries even on large codebases
+- **Token efficient** — 60-90% reduction vs reading raw files
+- **Structure-aware** — Understands calls, definitions, dependencies
+
+## Examples
+
+```bash
+# Understand a module
+smt context QueryEngine --depth 2
+
+# Find impact of changes
+smt impact Neo4jClient --depth 3
+
+# Search by meaning
+smt search "cycle detection"
+```
+
+## First Time?
+
+```bash
+smt status          # Verify graph is loaded (should show: X nodes, Y edges)
+smt build           # Build if graph is empty
+```
+
+For more: `smt --help` or `cat .claude/TOOLS.md`
+"""
+    with open(setup_md, 'w', encoding='utf-8') as f:
+        f.write(setup_content)
+    print("  .claude/SETUP.md       [OK]")
+
+    # ------------------------------------------------------------------
     # 3. CLAUDE.md — tells Claude how to work in this project
     # ------------------------------------------------------------------
     claude_md = target_dir / 'CLAUDE.md'
