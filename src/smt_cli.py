@@ -962,12 +962,25 @@ For more: `smt --help` or `cat .claude/TOOLS.md`
 
 When agents are spawned in this codebase, they should prefer semantic tools over raw file exploration.
 
+**IMPORTANT:** SMT commands are invoked via Bash. Examples:
+```bash
+smt status                          # Check if graph is ready
+smt context QueryEngine             # Get context for a symbol
+smt search "agent loop"             # Semantic search
+smt impact Neo4jClient --depth 3    # Impact analysis
+```
+
 ## Tool Hierarchy (in order of preference)
 
 ### Tier 1: Semantic Tools (Use FIRST)
-- `smt context <symbol>` — Get function + dependencies + callers
-- `smt search "<query>"` — Find related code by semantic meaning
-- `smt impact <symbol>` — Analyze breaking changes
+**Implementation:** Run via `Bash("smt context ...")` or similar
+
+- `bash: smt context <symbol>` — Get function + dependencies + callers
+  - Example: `Bash("smt context QueryEngine")`
+- `bash: smt search "<query>"` — Find related code by semantic meaning
+  - Example: `Bash("smt search 'agent loop'")`
+- `bash: smt impact <symbol>` — Analyze breaking changes
+  - Example: `Bash("smt impact Neo4jClient --depth 3")`
 
 ### Tier 2: Pattern Tools (Use for validation)
 - `Grep(pattern)` — Verify SMT results, exact matches
@@ -978,38 +991,50 @@ When agents are spawned in this codebase, they should prefer semantic tools over
 - `Edit(file)` — Make changes
 
 ### Tier 4: Shell (Avoid)
-- `Bash` — Only when no other tool applies
+- `Bash` — Only when no other tool applies (don't use for find/grep/locate)
 
 ## Decision Rules
 
-| Query | Use | Why |
-|-------|-----|-----|
-| "Find X" / "Where is X" | smt search / smt context | Semantic understanding |
-| "Does X call Y?" | smt impact | Built-in caller graph |
-| "Verify location" | Grep | Fast pattern validation |
-| "Show me code" | Read | Only after SMT locates it |
+| Query | Use | Why | Example |
+|-------|-----|-----|---------|
+| "Find X" / "Where is X" | `smt search` or `smt context` | Semantic understanding | `Bash("smt search 'authentication'")`|
+| "Does X call Y?" | `smt impact` | Built-in caller graph | `Bash("smt impact X --depth 3")` |
+| "Verify location" | `Grep` | Fast pattern validation | `Grep("FunctionName")` |
+| "Show me code" | `Read` | Only after SMT locates it | `Read(file_path)` |
 
 ## Anti-Patterns (DO NOT)
 
+❌ Use Bash find/grep/locate (use `smt search` instead)
+❌ Read entire files without SMT first (run `smt context` first)
+❌ Iterate files manually (use `smt search` once with Bash)
 ❌ Use Grep for exploratory queries (SMT is 10x more efficient)
-❌ Read entire files without SMT first (wastes 100+ tokens)
-❌ Use Bash find/grep (SMT already indexed everything)
-❌ Iterate files manually (use smt search once)
 
 ## Token Savings
 
 - SMT-first approach: 200-300 tokens for architecture understanding
 - Raw file reading: 500-1000+ tokens for same understanding
-- **Savings: 60-80% token reduction**
+- **Savings: 60-80% token reduction by avoiding manual file reads**
 
 ## Quick Start
 
 ```bash
-smt status              # Verify graph is ready
-smt search "pattern"    # Exploratory query
-smt context Symbol      # Dependency analysis
-Grep(identifier)        # Verification only
-Read(file)              # Final inspection
+# Verify graph is ready
+Bash("smt status")
+
+# Exploratory: find "auth middleware"
+Bash("smt search 'authentication middleware'")
+
+# Get context: understand a symbol
+Bash("smt context QueryEngine")
+
+# Analyze impact: what breaks if I change X
+Bash("smt impact Neo4jClient --depth 3")
+
+# Verification: confirm exact location
+Grep("function_name")
+
+# Final inspection: see full code
+Read("src/file.ts")
 ```
 
 For more: `smt --help` or `cat .claude/SETUP.md`

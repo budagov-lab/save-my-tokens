@@ -2,22 +2,34 @@
 
 This document defines how agents should interact with this codebase when spawned via tools or subagent contexts.
 
+**IMPORTANT:** SMT commands are invoked via Bash. Examples:
+```bash
+smt status                          # Check if graph is ready
+smt context QueryEngine             # Get context for a symbol
+smt search "agent loop"             # Semantic search
+smt impact Neo4jClient --depth 3    # Impact analysis
+```
+
 ## Tool Hierarchy (in order of preference)
 
 ### Tier 1: Semantic Tools (Use FIRST)
+**Implementation:** Run via `Bash("smt context ...")` or similar
 **Why:** 50-300x token efficient, understand code meaning, return structured relationships
 
-- `smt context <symbol>` — Get function + immediate dependencies + callers
+- `bash: smt context <symbol>` — Get function + immediate dependencies + callers
+  - Example: `Bash("smt context QueryEngine")`
   - Use for: "What does X do?", "What does X depend on?", "Who calls X?"
-  - Cost: 1-2 requests, 50-200 tokens
+  - Cost: 1-2 requests, 50-200 tokens (much cheaper than reading full files)
   - Best for: Architecture understanding, dependency analysis
 
-- `smt search "<query>"` — Find related code by semantic meaning
+- `bash: smt search "<query>"` — Find related code by semantic meaning
+  - Example: `Bash("smt search 'agent loop'")`
   - Use for: "Where is auth configured?", "Find similar patterns"
   - Cost: 1 request, 100-300 tokens
   - Best for: Exploratory queries, cross-cutting concerns
 
-- `smt impact <symbol>` — Analyze breaking changes
+- `bash: smt impact <symbol>` — Analyze breaking changes
+  - Example: `Bash("smt impact Neo4jClient --depth 3")`
   - Use for: "What breaks if I change X?"
   - Cost: 1 request, 200-400 tokens
   - Best for: Impact analysis, refactoring safety
