@@ -211,28 +211,68 @@ def step_setup_venv() -> bool:
             print(f"    source venv/bin/activate")
         return True
 
-    # Create venv using python -m venv (shows output)
-    print("  Creating virtual environment...")
-    print("  (This creates isolated Python environment)\n")
-
-    result = subprocess.run(
-        [sys.executable, '-m', 'venv', str(venv_dir)],
-        cwd=project_dir
-    )
-
-    if result.returncode != 0:
-        print_fail("Failed to create venv")
+    # Check write permission
+    print("  Checking write permissions...", end=" ", flush=True)
+    try:
+        test_file = project_dir / '.write_test'
+        test_file.write_text('test')
+        test_file.unlink()
+        print_pass("OK")
+    except Exception as e:
+        print_fail(f"Cannot write to {project_dir}")
+        print(f"    Error: {e}")
+        print("    Try running as Administrator (Windows) or with sudo (Mac/Linux)")
         return False
 
-    print()
-    print_pass("Virtual environment created")
+    # Create venv
+    print("  Creating virtual environment...")
+    print("  (Running: python -m venv venv)\n")
 
-    print("\n  To activate and continue setup, run:")
+    result = subprocess.run(
+        [sys.executable, '-m', 'venv', str(venv_dir), '--copies'],
+        cwd=project_dir,
+        capture_output=False
+    )
+
+    print()  # Blank line
+
+    # Check if venv was actually created
+    if not venv_dir.exists():
+        print_fail("venv directory was not created")
+        print("    Try manually: python -m venv venv")
+        return False
+
+    if result.returncode != 0:
+        print_fail("venv creation returned error code")
+        print("    Try manually: python -m venv venv")
+        return False
+
+    # Ensure pip is installed in venv
+    print("  Bootstrapping pip...", end=" ", flush=True)
     if sys.platform == 'win32':
-        print(f"\n    venv\\Scripts\\activate")
+        venv_python = venv_dir / 'Scripts' / 'python.exe'
+    else:
+        venv_python = venv_dir / 'bin' / 'python'
+
+    result = subprocess.run(
+        [str(venv_python), '-m', 'ensurepip', '--upgrade'],
+        capture_output=True,
+        timeout=60
+    )
+
+    if result.returncode == 0:
+        print_pass("OK")
+    else:
+        print_warn("ensurepip had issues, but continuing...")
+
+    print_pass("Virtual environment created successfully")
+
+    print("\n  To continue setup, activate the virtual environment:\n")
+    if sys.platform == 'win32':
+        print(f"    venv\\Scripts\\activate")
         print(f"    python setup.py\n")
     else:
-        print(f"\n    source venv/bin/activate")
+        print(f"    source venv/bin/activate")
         print(f"    python setup.py\n")
 
     return True
