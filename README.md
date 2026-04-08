@@ -50,20 +50,28 @@ smt impact Neo4jClient --depth 3
 
 ## Quick Start
 
-### Setup (One Command)
+### Setup (Two Steps)
 
 ```bash
 git clone https://github.com/budagov-lab/save-my-tokens
 cd save-my-tokens
-python setup.py
-```
 
-This handles everything:
-- Checks Python 3.11+ and docker-compose
-- Installs all dependencies (tree-sitter, Neo4j driver, embeddings, etc.)
-- Creates `.env` configuration
-- Starts Neo4j in Docker
-- (Takes 5-10 minutes the first time)
+# Step 1: Create virtual environment
+python setup.py
+# → Creates venv/ if needed, then shows activation command
+
+# Step 2: Activate and run setup inside venv
+venv\Scripts\activate          # Windows
+# or: source venv/bin/activate  # Mac/Linux
+
+python setup.py
+# → Now runs full setup:
+#   • Checks Python 3.11+ and docker-compose
+#   • Installs all dependencies (isolated in venv)
+#   • Creates .env configuration
+#   • Starts Neo4j in Docker
+#   (Takes 5-10 minutes on first run)
+```
 
 ### Build Your Code Graph
 
