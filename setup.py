@@ -194,11 +194,72 @@ def step_start_neo4j() -> bool:
     return True
 
 
+def step_setup_venv() -> bool:
+    """Step 0: Create/activate virtual environment if needed"""
+    print_header("Step 0: Virtual Environment")
+
+    project_dir = Path(__file__).parent
+    venv_dir = project_dir / 'venv'
+
+    # Check if venv already exists
+    if venv_dir.exists():
+        print_pass("venv already exists")
+        print("\n  To use it, run:")
+        print(f"    source venv/Scripts/activate  (Windows)")
+        print(f"    source venv/bin/activate      (Mac/Linux)")
+        return True
+
+    # Create venv
+    print("  Creating virtual environment...", end=" ", flush=True)
+    try:
+        import venv
+        venv.create(venv_dir, with_pip=True)
+        print_pass("created")
+    except Exception as e:
+        print_fail(f"Failed to create venv: {e}")
+        return False
+
+    # Get the python executable path in venv
+    if sys.platform == 'win32':
+        venv_python = venv_dir / 'Scripts' / 'python.exe'
+    else:
+        venv_python = venv_dir / 'bin' / 'python'
+
+    print("\n  To activate the virtual environment, run:")
+    if sys.platform == 'win32':
+        print(f"    venv\\Scripts\\activate")
+    else:
+        print(f"    source venv/bin/activate")
+    print("\n  Then run setup again: python setup.py\n")
+
+    return True
+
+
 def main() -> bool:
     """Run all setup steps in sequence."""
     print(f"\n{Colors.BOLD}{Colors.BLUE}{'='*70}{Colors.RESET}")
     print(f"{Colors.BOLD}SAVE-MY-TOKENS SETUP{Colors.RESET}")
     print(f"{Colors.BOLD}{Colors.BLUE}{'='*70}{Colors.RESET}\n")
+
+    # Check if we're already in a venv
+    in_venv = hasattr(sys, 'real_prefix') or (
+        hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
+    )
+
+    if not in_venv:
+        print("  ⚠️  Not running in a virtual environment")
+        print("  Creating one automatically...\n")
+        ok = step_setup_venv()
+        if not ok:
+            return False
+        print("\n  Please activate the virtual environment and run setup again:")
+        if sys.platform == 'win32':
+            print("    venv\\Scripts\\activate")
+            print("    python setup.py")
+        else:
+            print("    source venv/bin/activate")
+            print("    python setup.py")
+        return False
 
     steps = [
         ("Python 3.11+", step_check_python),
