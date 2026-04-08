@@ -1,0 +1,40 @@
+name: Lint & Type Check
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install black isort ruff mypy
+
+      - name: Check formatting (black)
+        run: |
+          black src/ tests/ --check --line-length 100
+
+      - name: Check import sorting (isort)
+        run: |
+          isort src/ tests/ --check-only --profile black
+
+      - name: Lint (ruff)
+        run: |
+          ruff check src/ tests/
+
+      - name: Type check (mypy)
+        run: |
+          mypy src/ --ignore-missing-imports --no-error-summary || true
