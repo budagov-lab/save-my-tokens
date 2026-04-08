@@ -282,36 +282,77 @@ smt hooks install|uninstall   Auto-sync hooks for git
 
 ## How Agents Use SMT
 
-### Example 1: Understanding a Function
+### CLI Approach (subprocess)
+
+Agents can invoke `smt` CLI commands directly via subprocess:
 
 ```python
-# Agent prompt: "Explain what validate_graph does"
-# Instead of reading 50-line file:
-
+# Example 1: Understanding a function
 result = subprocess.run(["smt", "definition", "validate_graph"])
 # Returns: signature, docstring, 1-hop callees (~50 tokens)
-# Agent explains clearly from minimal context
-```
 
-### Example 2: Refactoring Safely
-
-```python
-# Agent prompt: "I want to rename GraphBuilder.__init__. What breaks?"
-
+# Example 2: Impact analysis
 result = subprocess.run(["smt", "impact", "GraphBuilder.__init__", "--depth", "3"])
 # Returns: all callers grouped by distance (~250 tokens)
-# Agent identifies all breaking changes before making edits
-```
 
-### Example 3: Code Review
-
-```python
-# Agent: "Review this commit for impact"
-
+# Example 3: Commit analysis
 result = subprocess.run(["smt", "diff", "HEAD~1..HEAD"])
 # Shows: which symbols changed, who depends on them
-# Agent reviews in context of actual impact, not entire files
 ```
+
+**Pros**: Simple, works from any language, no imports needed.
+
+**Cons**: 
+- Subprocess latency (~100-300ms per call)
+- Parsing stdout is fragile
+- No structured return types (string parsing)
+- Agent chains are slow when chaining multiple queries
+
+---
+
+### A2A Approach: Agent-to-Agent Orchestration (recommended)
+
+For multi-step analysis workflows, use **A2A orchestration** — one orchestrator agent spawns and manages specialized subagents (Scout, Fabler, PathFinder) with deterministic, structured data flow.
+
+**Problem A2A Solves**:
+1. **Query sequencing**: Agent needs facts before it can reason (Scout → Fabler)
+   - Without A2A: Agent does N subprocess calls, waits for each, parses output, then decides next step
+   - With A2A: Orchestrator sends Scout once, gets structured JSON, routes directly to Fabler with those facts
+2. **Determinism**: Agent chains hallucinate code paths
+   - Without A2A: Fabler might reason about "a function that doesn't exist" based on bad Scout output parsing
+   - With A2A: SMTQueryEngine guarantees Scout returns only symbols that exist in the graph
+3. **Parallelism**: Some analyses can run at the same time
+   - Without A2A: Sequential subprocess calls block each other
+   - With A2A: Scout completes once, then Fabler and PathFinder run in parallel with identical facts
+
+**Solution: SMTQueryEngine**
+
+```python
+from src.agents.query_engine import SMTQueryEngine
+
+engine = SMTQueryEngine()
+
+# Scout agent gathers facts (deterministic, structured)
+definition = engine.definition("GraphBuilder")           # What is this?
+context = engine.context("GraphBuilder", depth=2)       # Working context
+impact = engine.impact("GraphBuilder", depth=3)         # Who calls this?
+search = engine.search("cycle detection", top_k=5)      # Semantic search
+
+# Results are JSON-serializable dicts, not stdout strings
+# Fabler/PathFinder agents receive these as structured input
+# No parsing, no hallucination risk, sub-20ms per call
+
+engine.close()
+```
+
+**Why A2A Over CLI**:
+| Aspect | CLI (subprocess) | A2A (SMTQueryEngine) |
+|---|---|---|
+| **Latency** | 100-300ms per call | <20ms per call |
+| **Return type** | stdout string (parse) | JSON dict (structured) |
+| **Agent chains** | Sequential only | Sequential + parallel |
+| **Hallucination risk** | High (parsing) | Low (verified symbols) |
+| **Use case** | Simple one-off queries | Complex multi-agent workflows |
 
 ---
 
@@ -439,10 +480,31 @@ Safe to work on in parallel:
 "Show me the impact analysis for validate_graph"
 ```
 
-The orchestrator (SKILL.md) automatically:
-1. Dispatches Scout first (gathers facts)
-2. Routes to Fabler or PathFinder based on question
-3. Synthesizes results for you
+### Under the Hood: A2A Orchestration
+
+The Agent Harness implements **A2A (Agent-to-Agent) orchestration** internally:
+
+```
+User Question
+     ↓
+Orchestrator (Claude Code)
+     ├→ Spawns Scout via SMTQueryEngine
+     │   (reads graph, gathers verified facts)
+     │
+     ├→ Routes to Fabler and/or PathFinder (parallel)
+     │   (each receives Scout's JSON output)
+     │
+     └→ Synthesizes final answer
+        (file:line locations + action plan)
+```
+
+**Why this matters**:
+- **Facts first**: Scout verifies symbols exist before Fabler reasons about them
+- **Parallel**: Fabler and PathFinder analyze independently (no waiting)
+- **No parsing**: All data is structured JSON (no stdout string parsing)
+- **Fast**: Each query <20ms, orchestration overhead minimal
+
+See [How Agents Use SMT: A2A Approach](#a2a-approach-agent-to-agent-orchestration-recommended) for implementation details and SMTQueryEngine API.
 
 ---
 
