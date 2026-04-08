@@ -109,76 +109,28 @@ def step_create_env() -> bool:
 
 
 def step_install_packages() -> bool:
-    """Step 4: Install packages sequentially with visible progress"""
+    """Step 4: Install packages with pip install -e ".[full]" """
     print_header("Step 4: Install Packages")
 
     project_dir = Path(__file__).parent
-    start_time = time.time()
 
-    # Install groups sequentially so user sees which one is slow
-    install_groups = [
-        {
-            "name": "Base CLI (pydantic-settings, loguru, rich)",
-            "packages": ["pydantic-settings>=2.0.0", "loguru>=0.7.0", "rich>=13.0.0"],
-        },
-        {
-            "name": "Tree-sitter parsers (Python, TypeScript)",
-            "packages": [
-                "tree-sitter>=0.20.4",
-                "tree-sitter-python>=0.20.4",
-                "tree-sitter-typescript>=0.20.4",
-            ],
-        },
-        {
-            "name": "Neo4j driver",
-            "packages": ["neo4j>=5.14.0"],
-        },
-        {
-            "name": "PyTorch (torch, torchvision)",
-            "packages": ["torch>=2.0.0", "torchvision>=0.15.0"],
-        },
-        {
-            "name": "Embeddings (sentence-transformers, FAISS, numpy)",
-            "packages": ["sentence-transformers>=2.2.0", "faiss-cpu>=1.7.4", "numpy>=1.24.0"],
-        },
-    ]
+    print("  Running: pip install -e '.[full]'")
+    print("  (You will see download progress, compilation status, etc.)\n")
 
-    results = []
-    for idx, group in enumerate(install_groups, 1):
-        print(f"\n  [{idx}/{len(install_groups)}] {group['name']}...")
-        group_start = time.time()
+    # Run pip with FULL OUTPUT visible to user
+    # No capture, no quiet mode — everything is shown in real-time
+    result = subprocess.run(
+        [sys.executable, '-m', 'pip', 'install', '-e', '.[full]'],
+        cwd=project_dir,
+    )
 
-        # Run pip install for this group (visible output, with -q to suppress "already satisfied" noise)
-        # If packages are already installed, pip will skip them automatically
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', 'install', '-q'] + group['packages'],
-            cwd=project_dir,
-            timeout=600
-        )
+    print()  # Blank line after pip
 
-        elapsed = time.time() - group_start
-        minutes = int(elapsed // 60)
-        seconds = int(elapsed % 60)
+    if result.returncode != 0:
+        print_fail("pip install failed")
+        return False
 
-        if result.returncode != 0:
-            print_fail(f"Installation failed")
-            return False
-
-        print_pass(f"Done ({minutes}m {seconds}s)")
-        results.append((group['name'], elapsed))
-
-    # Summary
-    total_time = time.time() - start_time
-    total_minutes = int(total_time // 60)
-    total_seconds = int(total_time % 60)
-
-    print()
-    print(f"  {Colors.BOLD}Installation Summary:{Colors.RESET}")
-    for name, elapsed in results:
-        m = int(elapsed // 60)
-        s = int(elapsed % 60)
-        print(f"    • {name}: {m}m {s}s")
-    print(f"  {Colors.BOLD}Total: {total_minutes}m {total_seconds}s{Colors.RESET}")
+    print_pass("Packages installed")
 
     # Verify smt command is available
     print()
@@ -192,7 +144,7 @@ def step_install_packages() -> bool:
         print_pass("accessible")
     else:
         print_warn("smt command may not be on PATH yet")
-        print("    Try restarting your terminal and running: smt --help")
+        print("    Restart terminal and try: smt --help")
 
     return True
 
