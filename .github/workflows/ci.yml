@@ -39,45 +39,56 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - name: Run setup pipeline
-        env:
-          NEO4J_PASSWORD: testpassword
-          NEO4J_URI: bolt://localhost:7687
+      - name: Install Python packages
         run: |
-          python configure.py
+          pip install --upgrade pip
+          pip install -e .
 
-      - name: Verify Neo4j is ready
+      - name: Create .env for CI
         run: |
-          sleep 5
-          python -c "
+          cat > .env << EOF
+          NEO4J_URI=bolt://localhost:7687
+          NEO4J_USER=neo4j
+          NEO4J_PASSWORD=testpassword
+          EMBEDDING_MODEL=all-MiniLM-L6-v2
+          LOG_LEVEL=INFO
+          EOF
+
+      - name: Wait for Neo4j to be ready
+        run: |
+          for i in {1..30}; do
+            echo "Waiting for Neo4j... attempt $i/30"
+            python -c "
           from neo4j import GraphDatabase
-          driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'testpassword'))
-          with driver.session() as session:
-              result = session.run('RETURN 1')
-              print('Neo4j connection OK')
-          driver.close()
-          "
+          try:
+              driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'testpassword'), connection_timeout=5)
+              with driver.session() as session:
+                  session.run('RETURN 1')
+              print('Neo4j is ready')
+              driver.close()
+              exit(0)
+          except Exception as e:
+              print(f'Not ready yet: {e}')
+              exit(1)
+            " && break
+            sleep 2
+          done
+
+      - name: Run prelaunch checks
+        run: |
+          python prelaunch_check.py
 
       - name: Build graph
-        env:
-          NEO4J_PASSWORD: testpassword
-          NEO4J_URI: bolt://localhost:7687
         run: |
-          smt build --dir src/
+          smt build
 
       - name: Check graph status
-        env:
-          NEO4J_PASSWORD: testpassword
-          NEO4J_URI: bolt://localhost:7687
         run: |
           smt status
 
       - name: Run tests
-        env:
-          NEO4J_PASSWORD: testpassword
-          NEO4J_URI: bolt://localhost:7687
         run: |
-          pytest tests/ -v --cov=src --cov-report=term-missing
+          pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
 
       - name: Upload coverage
         if: always()
