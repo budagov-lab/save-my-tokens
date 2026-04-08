@@ -289,6 +289,25 @@ def main() -> bool:
         hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
     )
 
+    # If in venv, verify pip works
+    if in_venv:
+        print("  ✓ Running in virtual environment")
+        result = subprocess.run(
+            [sys.executable, '-m', 'pip', '--version'],
+            capture_output=True,
+            timeout=10
+        )
+        if result.returncode != 0:
+            print_fail("pip is broken in venv!")
+            print("\n  Fix: Delete and recreate venv:")
+            if sys.platform == 'win32':
+                print("    rmdir /s /q venv")
+            else:
+                print("    rm -rf venv")
+            print("    python setup.py")
+            return False
+        print()
+
     if not in_venv:
         print("  ⚠️  Not running in a virtual environment")
         print("  Creating one automatically...\n")
