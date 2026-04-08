@@ -2,14 +2,14 @@
 
 **Intelligent code context for Claude — without reading entire files.**
 
-Instead of asking Claude to read 500-line files, SMT queries a **semantic dependency graph** of your codebase and returns only the **smallest relevant subgraph**. Result: **60-90% fewer tokens**, **sub-20ms queries**, and **cycle-safe bounds**.
+Instead of asking Claude to read 500-line files, SMT queries a **semantic dependency graph** of your codebase and returns only the **smallest relevant subgraph**. Result: **faster context**, **smaller payloads**, and **cycle-safe bounds**.
 
 ---
 
 ## The Problem
 
 Claude reads **entire files** to understand one function:
-- "What does `GraphBuilder` do?" → reads 200 lines, uses 500+ tokens
+- "What does `GraphBuilder` do?" → reads 200 lines to answer
 - "Who calls `parse_diff`?" → reads all 40 functions in the file
 - "What breaks if I change `Neo4jClient`?" → reads deeply into the dependency tree
 
@@ -23,13 +23,13 @@ SMT builds a **graph of function-level dependencies** from your code, then answe
 
 ```bash
 # What is this? (definition + signature)
-smt definition GraphBuilder           # ~13ms, ~100 tokens
+smt definition GraphBuilder
 
 # What do I need to work on this? (working context)
-smt context GraphBuilder --depth 2    # ~19ms, ~200 tokens
+smt context GraphBuilder --depth 2
 
 # What breaks if I change this? (impact analysis)
-smt impact Neo4jClient --depth 3      # ~23ms, ~250 tokens
+smt impact Neo4jClient --depth 3
 ```
 
 ---
@@ -38,13 +38,11 @@ smt impact Neo4jClient --depth 3      # ~23ms, ~250 tokens
 
 ✅ **Three Query Modes** — Each answers one agent question (definition / context / impact)
 
-✅ **Cycle-Safe** — Detects circular dependencies (Tarjan's SCC algorithm), never spirals into 10k nodes
-
-✅ **Fast** — Sub-20ms queries with automatic connection pooling
+✅ **Cycle-Safe** — Detects circular dependencies (Tarjan's SCC algorithm), prevents unbounded context expansion
 
 ✅ **Validated** — Shows git freshness status ("fresh" or "N commits behind")
 
-✅ **Compressed** — Removes trivial bridge functions, optional `--compress` flag saves 40-50% tokens
+✅ **Compressed** — Removes trivial bridge functions with optional `--compress` flag
 
 ✅ **Multi-Language** — Python + TypeScript (via Tree-sitter), extensible to more languages
 
@@ -70,7 +68,7 @@ sleep 10         # wait for startup
 ### 3. Build the graph
 
 ```bash
-smt build        # Parses src/, builds Neo4j graph (~30s for large projects)
+smt build        # Parses src/, builds Neo4j graph
 smt status       # Check: should show node/edge counts
 ```
 
@@ -106,7 +104,7 @@ GraphBuilder  [Class]
 ```
 
 **Use when:** Agent needs to understand what a symbol is
-**Latency:** ~13ms | **Tokens:** ~100 | **Depth:** 1 hop
+**Scope:** 1 hop (immediate dependencies)
 
 ---
 
@@ -131,12 +129,12 @@ GraphBuilder  [Class]
   callers (1):
     cmd_build  (smt_cli.py)
 
-  context: nodes=7 edges=5 depth=2 cycles=1 ~tokens=210
+  context: nodes=7 edges=5 depth=2 cycles=1
   HEAD 1d27a7a  [✓] fresh
 ```
 
 **Use when:** Agent refactoring, understanding dependencies, writing code
-**Latency:** ~19ms | **Tokens:** ~200-300 | **Depth:** 2-3 hops (bounded)
+**Scope:** 2-3 hops (bounded depth)
 
 ---
 
@@ -161,24 +159,24 @@ Impact: Neo4jClient  [Class]
   [Cycle: get_bounded_subgraph → create_edges → get_bounded_subgraph]
     2 functions in cycle
 
-  impact: nodes=12 depth=2 cycles=1 ~tokens=280
+  impact: nodes=12 depth=2 cycles=1
   HEAD 1d27a7a  [✓] fresh
 ```
 
 **Use when:** Planning refactors, understanding breaking changes, impact analysis
-**Latency:** ~23ms | **Tokens:** ~250-350 | **Depth:** 3-4 hops (reverse)
+**Scope:** 3-4 hops (reverse traversal)
 
 ---
 
 ## Advanced Usage
 
-### Compression (reduce tokens 40-50%)
+### Compression (remove trivial functions)
 
 ```bash
 # Remove "bridge" functions (trivial forwarders with no logic)
 smt context GraphBuilder --depth 2 --compress
 
-context: nodes=7→4 edges=5→3 depth=2 cycles=1 ~tokens=130
+context: nodes=7→4 edges=5→3 depth=2 cycles=1
 compressed: 3 bridge functions removed
 ```
 
@@ -225,28 +223,6 @@ Your Codebase (Python / TypeScript)
 
 ---
 
-## Performance
-
-### Latency
-
-| Query | Latency | 99th Percentile |
-|---|---|---|
-| definition | 13ms | 15ms |
-| context --depth 2 | 19ms | 26ms |
-| impact --depth 3 | 23ms | 31ms |
-
-(Tested on 6,194-node graph with connection pooling)
-
-### Token Savings
-
-| Scenario | Raw File | SMT | Savings |
-|---|---|---|---|
-| Single function definition | 500-600 | 50-100 | **85-90%** |
-| Function + 2-hop context | 800-1200 | 200-300 | **70-75%** |
-| Impact analysis (10+ callers) | 1500+ | 250-350 | **75-80%** |
-
----
-
 ## CLI Reference
 
 ```
@@ -289,11 +265,11 @@ Agents can invoke `smt` CLI commands directly via subprocess:
 ```python
 # Example 1: Understanding a function
 result = subprocess.run(["smt", "definition", "validate_graph"])
-# Returns: signature, docstring, 1-hop callees (~50 tokens)
+# Returns: signature, docstring, 1-hop callees
 
 # Example 2: Impact analysis
 result = subprocess.run(["smt", "impact", "GraphBuilder.__init__", "--depth", "3"])
-# Returns: all callers grouped by distance (~250 tokens)
+# Returns: all callers grouped by distance
 
 # Example 3: Commit analysis
 result = subprocess.run(["smt", "diff", "HEAD~1..HEAD"])
@@ -303,10 +279,10 @@ result = subprocess.run(["smt", "diff", "HEAD~1..HEAD"])
 **Pros**: Simple, works from any language, no imports needed.
 
 **Cons**: 
-- Subprocess latency (~100-300ms per call)
+- Subprocess overhead per call
 - Parsing stdout is fragile
 - No structured return types (string parsing)
-- Agent chains are slow when chaining multiple queries
+- Sequencing multiple queries requires parsing between steps
 
 ---
 
@@ -340,7 +316,7 @@ search = engine.search("cycle detection", top_k=5)      # Semantic search
 
 # Results are JSON-serializable dicts, not stdout strings
 # Fabler/PathFinder agents receive these as structured input
-# No parsing, no hallucination risk, sub-20ms per call
+# No parsing, no hallucination risk
 
 engine.close()
 ```
@@ -348,8 +324,8 @@ engine.close()
 **Why A2A Over CLI**:
 | Aspect | CLI (subprocess) | A2A (SMTQueryEngine) |
 |---|---|---|
-| **Latency** | 100-300ms per call | <20ms per call |
 | **Return type** | stdout string (parse) | JSON dict (structured) |
+| **Overhead** | Per-call subprocess | In-process queries |
 | **Agent chains** | Sequential only | Sequential + parallel |
 | **Hallucination risk** | High (parsing) | Low (verified symbols) |
 | **Use case** | Simple one-off queries | Complex multi-agent workflows |
@@ -365,7 +341,7 @@ A: Yes. You can run it locally (`smt docker up`) or point to an existing instanc
 A: Python and TypeScript (via Tree-sitter). More languages can be added.
 
 **Q: How often should I rebuild?**
-A: `smt diff` syncs incrementally after commits. Full `smt build` takes ~30s for large projects. Use git hooks for auto-sync.
+A: `smt diff` syncs incrementally after commits. Use `smt build` for full rebuilds. Set up git hooks for auto-sync.
 
 **Q: Can I use it with Claude?**
 A: Yes! Agents can invoke `smt` via Bash:
@@ -376,8 +352,8 @@ $ smt context GraphBuilder --depth 2
 **Q: What about private codebases?**
 A: Everything runs locally. Neo4j stays on your machine.
 
-**Q: Performance on very large codebases (100k+ LOC)?**
-A: Tested on 512k-lines (40k+ nodes). Queries still sub-30ms. Neo4j Community can handle millions of nodes.
+**Q: Can it handle very large codebases (100k+ LOC)?**
+A: SMT is designed for large graphs. Neo4j Community can handle millions of nodes. Queries scale with depth bounds, not codebase size.
 
 ---
 
@@ -502,7 +478,7 @@ Orchestrator (Claude Code)
 - **Facts first**: Scout verifies symbols exist before Fabler reasons about them
 - **Parallel**: Fabler and PathFinder analyze independently (no waiting)
 - **No parsing**: All data is structured JSON (no stdout string parsing)
-- **Fast**: Each query <20ms, orchestration overhead minimal
+- **Deterministic**: No hallucination risk from string parsing or symbol inference
 
 See [How Agents Use SMT: A2A Approach](#a2a-approach-agent-to-agent-orchestration-recommended) for implementation details and SMTQueryEngine API.
 
