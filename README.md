@@ -313,37 +313,6 @@ result = subprocess.run(["smt", "diff", "HEAD~1..HEAD"])
 # Agent reviews in context of actual impact, not entire files
 ```
 
-### A2A Programmatic API: SMTQueryEngine
-
-For agent-to-agent orchestration without subprocess overhead, use `SMTQueryEngine` directly:
-
-```python
-from src.agents.query_engine import SMTQueryEngine
-
-engine = SMTQueryEngine()
-
-# Scout agent gathers facts
-definition = engine.definition("GraphBuilder")       # What is this?
-context = engine.context("GraphBuilder", depth=2)   # Working context
-impact = engine.impact("GraphBuilder", depth=3)     # Who calls this?
-search = engine.search("cycle detection", top_k=5)  # Semantic search
-status = engine.status()                            # Graph health
-
-# Returns JSON-serializable dicts (no stdout, suitable for A2A routing)
-# Fabler agent uses these facts to reason about change impact
-# PathFinder uses these to identify isolated components
-
-engine.close()
-```
-
-**Use this when**:
-- Orchestrating specialized agents (Scout → Fabler/PathFinder)
-- Avoiding subprocess latency in agent chains
-- Building programmatic tools that need structured graph data
-- Implementing custom analysis workflows
-
-See `src/agents/query_engine.py` for full API documentation.
-
 ---
 
 ## FAQ
@@ -368,35 +337,6 @@ A: Everything runs locally. Neo4j stays on your machine.
 
 **Q: Performance on very large codebases (100k+ LOC)?**
 A: Tested on 512k-lines (40k+ nodes). Queries still sub-30ms. Neo4j Community can handle millions of nodes.
-
----
-
-## Agent Harness: Agent-to-Agent Orchestration
-
-SMT includes an **A2A (Agent-to-Agent) system** that coordinates a team of specialized agents for code analysis. One orchestrating agent spawns and manages Scout, Fabler, and PathFinder to solve complex code understanding tasks.
-
-### How A2A Works
-
-```
-User Question
-    ↓
-Orchestrator (Claude Code)
-    ├→ Spawns Scout (reads graph via smt CLI)
-    │    ↓
-    │  Scout gathers facts: definitions, contexts, impacts
-    │    ↓
-    ├→ Routes to Fabler and/or PathFinder based on question
-    │    ├→ Fabler: predicts change impact
-    │    └→ PathFinder: finds independent components
-    │    ↓
-    └→ Synthesizes results into actionable advice
-```
-
-**Why A2A?**
-- **Specialization**: Each agent has one job (Scout reads, Fabler analyzes, PathFinder isolates)
-- **Determinism**: Uses CLI (`smt` commands) instead of hallucinated code paths
-- **Parallel**: Scout runs first, then Fabler and PathFinder run in parallel
-- **Accuracy**: Combines verified facts from SMT graph with causal reasoning
 
 ---
 
@@ -499,22 +439,10 @@ Safe to work on in parallel:
 "Show me the impact analysis for validate_graph"
 ```
 
-### A2A Orchestration Flow
-
-The orchestrator automatically:
-1. **Dispatches Scout** first (reads smt CLI, gathers facts about the graph)
-   - Checks graph freshness
-   - Looks up symbols
-   - Collects contexts and impact analysis
-2. **Routes to Fabler and/or PathFinder** in parallel based on question type
-   - Impact analysis → Fabler
-   - Isolation/parallelization → PathFinder
-   - Both needed → run both
-3. **Synthesizes results** for you
-   - Combines Scout's verified facts with causal analysis
-   - Returns file:line locations + action plan
-
-See `.claude/skills/smt-analysis/SKILL.md` for full orchestration logic and red flags to avoid.
+The orchestrator (SKILL.md) automatically:
+1. Dispatches Scout first (gathers facts)
+2. Routes to Fabler or PathFinder based on question
+3. Synthesizes results for you
 
 ---
 
