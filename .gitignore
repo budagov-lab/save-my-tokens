@@ -86,3 +86,7 @@ run_tests.py
 extract_test_results.py
 run_comprehensive_tests.py
 .smt/embeddings/
+
+# CLI wrappers (machine-specific, generated at setup time)
+smt.bat
+smt

@@ -50,35 +50,39 @@ smt impact Neo4jClient --depth 3
 
 ## Quick Start
 
-### 1. Install
+### Setup (One Command)
 
 ```bash
 git clone https://github.com/budagov-lab/save-my-tokens
 cd save-my-tokens
-pip install -e .
+python setup.py
 ```
 
-### 2. Start Neo4j
+This handles everything:
+- Checks Python 3.11+ and docker-compose
+- Installs all dependencies (tree-sitter, Neo4j driver, embeddings, etc.)
+- Creates `.env` configuration
+- Starts Neo4j in Docker
+- (Takes 5-10 minutes the first time)
+
+### Build Your Code Graph
 
 ```bash
-smt docker up    # or: docker-compose up -d neo4j
-sleep 10         # wait for startup
+smt build
 ```
 
-### 3. Build the graph
+This parses your codebase (or sample fixtures) and builds the dependency graph.
+
+### First Query
 
 ```bash
-smt build        # Parses src/, builds Neo4j graph
-smt status       # Check: should show node/edge counts
-```
+# Check graph status
+smt status
 
-### 4. Query
-
-```bash
-# Try all three modes on your codebase
-smt definition MyClass
-smt context MyClass --depth 2
-smt impact MyFunction --depth 3 --compress
+# Query your code
+smt definition MyClass              # "What is this?"
+smt context MyClass --depth 2       # "What do I need to work on this?"
+smt impact MyFunction --depth 3     # "What breaks if I change this?"
 ```
 
 ---
