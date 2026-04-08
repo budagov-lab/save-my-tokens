@@ -211,44 +211,53 @@ def step_setup_venv() -> bool:
             print(f"    source venv/bin/activate")
         return True
 
-    # Check write permission
-    print("  Checking write permissions...", end=" ", flush=True)
-    try:
-        test_file = project_dir / '.write_test'
-        test_file.write_text('test')
-        test_file.unlink()
-        print_pass("OK")
-    except Exception as e:
-        print_fail(f"Cannot write to {project_dir}")
-        print(f"    Error: {e}")
-        print("    Try running as Administrator (Windows) or with sudo (Mac/Linux)")
-        return False
-
     # Create venv
     print("  Creating virtual environment...")
+    print(f"  Path: {venv_dir}")
     print("  (Running: python -m venv venv)\n")
 
-    result = subprocess.run(
-        [sys.executable, '-m', 'venv', str(venv_dir), '--copies'],
-        cwd=project_dir,
-        capture_output=False
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'venv', str(venv_dir), '--copies'],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            timeout=120  # 2 minute timeout
+        )
 
-    print()  # Blank line
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print("  STDERR:", result.stderr)
+
+    except subprocess.TimeoutExpired:
+        print_fail("venv creation timed out (>2 min)")
+        print("    Possible causes: slow disk, anti-virus scanning, permissions")
+        print("    Try manually in terminal: python -m venv venv")
+        return False
+    except Exception as e:
+        print_fail(f"venv creation error: {e}")
+        return False
 
     # Check if venv was actually created
     if not venv_dir.exists():
         print_fail("venv directory was not created")
-        print("    Try manually: python -m venv venv")
+        if result.returncode != 0:
+            print(f"  Error: {result.stderr}")
+        print("  Try manually: python -m venv venv")
         return False
 
     if result.returncode != 0:
-        print_fail("venv creation returned error code")
-        print("    Try manually: python -m venv venv")
+        print_fail(f"venv creation failed with code {result.returncode}")
+        if result.stderr:
+            print(f"  Error: {result.stderr}")
+        print("  Try manually: python -m venv venv")
         return False
 
+    print_pass("venv created")
+
     # Ensure pip is installed in venv
-    print("  Bootstrapping pip...", end=" ", flush=True)
+    print("  Installing pip...", end=" ", flush=True)
     if sys.platform == 'win32':
         venv_python = venv_dir / 'Scripts' / 'python.exe'
     else:
@@ -263,9 +272,11 @@ def step_setup_venv() -> bool:
     if result.returncode == 0:
         print_pass("OK")
     else:
-        print_warn("ensurepip had issues, but continuing...")
+        print_fail(f"pip install failed")
+        print(f"    {result.stderr.decode() if result.stderr else 'Unknown error'}")
+        return False
 
-    print_pass("Virtual environment created successfully")
+    print_pass("Virtual environment ready")
 
     print("\n  To continue setup, activate the virtual environment:\n")
     if sys.platform == 'win32':
