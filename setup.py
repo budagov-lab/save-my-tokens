@@ -205,32 +205,35 @@ def step_setup_venv() -> bool:
     if venv_dir.exists():
         print_pass("venv already exists")
         print("\n  To use it, run:")
-        print(f"    source venv/Scripts/activate  (Windows)")
-        print(f"    source venv/bin/activate      (Mac/Linux)")
+        if sys.platform == 'win32':
+            print(f"    venv\\Scripts\\activate")
+        else:
+            print(f"    source venv/bin/activate")
         return True
 
-    # Create venv
-    print("  Creating virtual environment...", end=" ", flush=True)
-    try:
-        import venv
-        venv.create(venv_dir, with_pip=True)
-        print_pass("created")
-    except Exception as e:
-        print_fail(f"Failed to create venv: {e}")
+    # Create venv using python -m venv (shows output)
+    print("  Creating virtual environment...")
+    print("  (This creates isolated Python environment)\n")
+
+    result = subprocess.run(
+        [sys.executable, '-m', 'venv', str(venv_dir)],
+        cwd=project_dir
+    )
+
+    if result.returncode != 0:
+        print_fail("Failed to create venv")
         return False
 
-    # Get the python executable path in venv
-    if sys.platform == 'win32':
-        venv_python = venv_dir / 'Scripts' / 'python.exe'
-    else:
-        venv_python = venv_dir / 'bin' / 'python'
+    print()
+    print_pass("Virtual environment created")
 
-    print("\n  To activate the virtual environment, run:")
+    print("\n  To activate and continue setup, run:")
     if sys.platform == 'win32':
-        print(f"    venv\\Scripts\\activate")
+        print(f"\n    venv\\Scripts\\activate")
+        print(f"    python setup.py\n")
     else:
-        print(f"    source venv/bin/activate")
-    print("\n  Then run setup again: python setup.py\n")
+        print(f"\n    source venv/bin/activate")
+        print(f"    python setup.py\n")
 
     return True
 
