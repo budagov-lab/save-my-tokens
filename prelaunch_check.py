@@ -14,37 +14,9 @@ import json
 import subprocess
 from pathlib import Path
 
-
-class Colors:
-    """ANSI color codes for terminal output."""
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
-
-
-def print_header(text):
-    """Print a section header."""
-    print(f"\n{Colors.BOLD}{Colors.BLUE}{'='*70}{Colors.RESET}")
-    print(f"{Colors.BOLD}{text}{Colors.RESET}")
-    print(f"{Colors.BOLD}{Colors.BLUE}{'='*70}{Colors.RESET}\n")
-
-
-def print_pass(text):
-    """Print a passing check."""
-    print(f"{Colors.GREEN}[OK] {text}{Colors.RESET}")
-
-
-def print_fail(text):
-    """Print a failing check."""
-    print(f"{Colors.RED}[FAIL] {text}{Colors.RESET}")
-
-
-def print_warn(text):
-    """Print a warning."""
-    print(f"{Colors.YELLOW}[WARN] {text}{Colors.RESET}")
+# Add src/ to path for cli_utils import
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
+from cli_utils import Colors, print_header, print_pass, print_fail, print_warn
 
 
 def check_python_version():
@@ -90,7 +62,6 @@ def check_project_structure():
         "src/": "Source code",
         "src/parsers/": "Parser modules",
         "src/graph/": "Graph modules",
-        "src/mcp_server/": "MCP server",
         ".claude/": "Claude configuration",
         "tests/": "Test suite",
     }
@@ -110,10 +81,8 @@ def check_config_files():
     """Check Claude Code config files exist."""
     print_header("Claude Code Configuration")
     required_files = {
-        ".mcp.json": "MCP server config",
         ".claude/settings.json": "Claude Code settings",
         ".claude/workspace.json": "Workspace config",
-        ".claude/skills/mcp-guide/SKILL.md": "MCP guide skill",
     }
 
     all_exist = True
@@ -133,7 +102,6 @@ def check_dependencies():
         "loguru": "Logging",
         "neo4j": "Neo4j driver",
         "tree_sitter": "Tree-sitter parser",
-        "mcp": "MCP framework",
         "sentence_transformers": "Embeddings",
         "pydantic": "Data validation",
     }

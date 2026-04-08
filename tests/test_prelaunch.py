@@ -2,13 +2,12 @@
 Pre-launch tests for save-my-tokens.
 
 These tests verify that the basic setup and dependencies work before
-running the full MCP server.
+running the CLI tool.
 """
 
 import sys
 import json
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -41,13 +40,13 @@ class TestDependencies:
         except ImportError:
             pytest.skip("tree-sitter not installed")
 
-    def test_import_mcp(self):
-        """Test mcp framework is available."""
+    def test_import_sentence_transformers(self):
+        """Test sentence-transformers is available."""
         try:
-            import mcp
-            assert mcp is not None
+            import sentence_transformers
+            assert sentence_transformers is not None
         except ImportError:
-            pytest.skip("mcp not installed")
+            pytest.skip("sentence-transformers not installed")
 
 
 class TestSyntax:
@@ -62,7 +61,7 @@ class TestSyntax:
         )
         assert result.returncode == 0, f"Syntax error in run.py: {result.stderr.decode()}"
 
-    def test_setup_py_syntax(self):
+    def test_configure_py_syntax(self):
         """Test configure.py has valid Python syntax."""
         result = subprocess.run(
             [sys.executable, "-m", "py_compile", "configure.py"],
@@ -71,28 +70,18 @@ class TestSyntax:
         )
         assert result.returncode == 0, f"Syntax error in configure.py: {result.stderr.decode()}"
 
+    def test_smt_cli_py_syntax(self):
+        """Test src/smt_cli.py has valid Python syntax."""
+        result = subprocess.run(
+            [sys.executable, "-m", "py_compile", "src/smt_cli.py"],
+            capture_output=True,
+            timeout=5
+        )
+        assert result.returncode == 0, f"Syntax error in src/smt_cli.py: {result.stderr.decode()}"
+
 
 class TestConfigFiles:
     """Test that Claude Code config files can be created."""
-
-    def test_create_mcp_json(self, tmp_path):
-        """Test .mcp.json creation."""
-        mcp_file = tmp_path / ".mcp.json"
-        config = {
-            "mcpServers": {
-                "smt": {
-                    "command": "python",
-                    "args": ["run.py"]
-                }
-            }
-        }
-        with open(mcp_file, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2)
-
-        assert mcp_file.exists()
-        with open(mcp_file) as f:
-            loaded = json.load(f)
-        assert loaded == config
 
     def test_create_settings_json(self, tmp_path):
         """Test .claude/settings.json creation."""
@@ -111,22 +100,6 @@ class TestConfigFiles:
         with open(settings_file) as f:
             loaded = json.load(f)
         assert loaded == settings
-
-    def test_create_skill_md(self, tmp_path):
-        """Test .claude/skills/mcp-guide/SKILL.md creation."""
-        skill_file = tmp_path / "SKILL.md"
-        content = """---
-name: mcp-guide
-description: Test guide
----
-
-# Test
-"""
-        with open(skill_file, 'w', encoding='utf-8') as f:
-            f.write(content)
-
-        assert skill_file.exists()
-        assert skill_file.read_text(encoding='utf-8').startswith("---\n")
 
 
 class TestRunPy:
@@ -179,18 +152,14 @@ class TestSourceFiles:
         assert graph_dir.exists()
         assert (graph_dir / "__init__.py").exists()
 
-    def test_src_mcp_server_exist(self):
-        """Test src/mcp_server directory exists."""
-        mcp_dir = Path("src/mcp_server")
-        assert mcp_dir.exists()
-        assert (mcp_dir / "__init__.py").exists()
+    def test_src_smt_cli_exists(self):
+        """Test src/smt_cli.py exists."""
+        cli_file = Path("src/smt_cli.py")
+        assert cli_file.exists()
 
     def test_claude_config_files_exist(self):
         """Test essential Claude config files exist."""
-        assert Path(".mcp.json").exists(), ".mcp.json missing"
         assert Path(".claude/settings.json").exists(), ".claude/settings.json missing"
-        assert Path(".claude/workspace.json").exists(), ".claude/workspace.json missing"
-        assert Path(".claude/skills/mcp-guide/SKILL.md").exists(), "SKILL.md missing"
 
 
 class TestGitRepo:

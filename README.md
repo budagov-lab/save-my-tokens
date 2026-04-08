@@ -340,6 +340,112 @@ A: Tested on 512k-lines (40k+ nodes). Queries still sub-30ms. Neo4j Community ca
 
 ---
 
+## Agent Harness: Automated Code Analysis
+
+SMT includes **Scout, Fabler, and PathFinder** — a team of specialized agents that automate multi-step code analysis workflows.
+
+### Scout: Read-Only Graph Analyst
+
+**Use when**: You need facts about code structure and dependencies
+
+```bash
+/smt-analysis
+# Scout runs: smt status → smt definition → smt context → smt impact
+# Returns: Exact file:line locations, caller counts, cycle detection
+```
+
+**Example**:
+```
+Question: "Who calls GraphBuilder.build?"
+Scout queries: smt context GraphBuilder.build --depth 3
+Returns: 7 direct callers, 12 indirect, no cycles, graph is fresh
+```
+
+### Fabler: What-If Impact Analyst
+
+**Use when**: You want to predict consequences of a code change
+
+```bash
+# Ask naturally:
+# "What would break if I renamed GraphBuilder.build to GraphBuilder.execute?"
+# "Impact analysis: refactor Neo4jClient.__init__"
+```
+
+**What Fabler does**:
+1. Receives Scout's verified facts
+2. Classifies each caller: **Breaking** / **Degraded** / **Unaffected**
+3. Proposes safe change order (leaf functions first)
+4. Assesses if change can be atomic (one commit)
+
+**Example output**:
+```
+Proposed change: Rename GraphBuilder.build() → GraphBuilder.execute()
+Confidence: HIGH
+
+Direct callers affected: 1
+- cmd_build (src/smt_cli.py:168): BREAKING
+
+Safe change order:
+  Step 1: Rename in src/graph/graph_builder.py
+  Step 2: Update caller in src/smt_cli.py
+  Step 3: Update tests/
+
+Atomicity: One commit ✓
+```
+
+### PathFinder: Code Isolation Analyst
+
+**Use when**: You need to find independent code areas for parallel development
+
+```bash
+# Ask naturally:
+# "What parts of src/parsers can we work on independently?"
+# "Find isolated components in the graph module"
+```
+
+**What PathFinder does**:
+1. Enumerates all symbols in target area
+2. Checks for external dependencies per component
+3. Identifies connected components (tightly coupled groups)
+4. Outputs safe parallel work groupings
+
+**Example output**:
+```
+Independent components found: 2
+
+Component 1: PythonParser, _extract_function_node
+  - External callers: GraphBuilder.build (read-only)
+  - Status: Fully isolated
+
+Component 2: TypeScriptParser, _extract_ts_function
+  - External callers: GraphBuilder.build (read-only)
+  - Status: Fully isolated
+
+Safe to work on in parallel:
+  Team A: Refactor PythonParser
+  Team B: Refactor TypeScriptParser
+  (No coordination needed)
+```
+
+### How to Use the Agent Harness
+
+```bash
+# In Claude Code, invoke directly:
+/smt-analysis
+
+# Or ask questions that trigger it:
+"What breaks if I change Neo4jClient?"
+"Can we work on src/parsers independently?"
+"Show me the impact analysis for validate_graph"
+```
+
+The orchestrator (SKILL.md) automatically:
+1. Dispatches Scout first (gathers facts)
+2. Routes to Fabler or PathFinder based on question
+3. Synthesizes results for you
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and testing.
@@ -352,11 +458,16 @@ MIT
 
 ---
 
+## Documentation
+
+- **[CLAUDE.md](CLAUDE.md)** — Project guidance, architecture, development workflows
+
+---
+
 ## Links
 
 - **GitHub:** https://github.com/budagov-lab/save-my-tokens
 - **Issues:** https://github.com/budagov-lab/save-my-tokens/issues
-- **Docs:** [FINAL_SUMMARY.md](FINAL_SUMMARY.md) for architecture + design decisions
 
 ---
 

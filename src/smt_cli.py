@@ -45,6 +45,28 @@ _neo4j_client: Optional[Any] = None
 _validation_cache: Optional[Any] = None
 
 
+# ---------------------------------------------------------------------------
+# Color output (from shared cli_utils)
+# ---------------------------------------------------------------------------
+
+from cli_utils import Colors
+
+# Compatibility aliases for existing code
+_C = Colors
+
+def _ok(msg: str) -> None:
+    """Print OK status."""
+    print(f"{Colors.GREEN}[OK]{Colors.RESET}   {msg}")
+
+def _fail(msg: str) -> None:
+    """Print FAIL status."""
+    print(f"{Colors.RED}[FAIL]{Colors.RESET} {msg}")
+
+def _warn(msg: str) -> None:
+    """Print WARN status."""
+    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {msg}")
+
+
 def _get_neo4j_client():
     """Get or create singleton Neo4j client (connection pooling)."""
     global _neo4j_client
@@ -805,6 +827,409 @@ def _git_initial_commit(target_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Skill markdown constants (for .claude/skills/ directory)
+# ---------------------------------------------------------------------------
+
+_SKILL_AGENT_QUERY_GUIDE = """\
+# SMT Agent Query Guide
+
+Use this file to decide which SMT command to run.
+
+## Decision Tree
+
+```
+What do you need?
+├── Understand what a symbol does
+│   └── smt context <symbol>
+│       └── Need deeper dependency chain?
+│           └── smt context <symbol> --depth 2
+├── See who calls a function
+│   └── smt callers <symbol>
+├── Find code by meaning or topic
+│   └── smt search "description"
+├── Analyze impact of a change
+│   └── smt impact <symbol>
+│       └── Need wider blast radius?
+│           └── smt impact <symbol> --depth 5
+├── Check graph health
+│   └── smt status
+└── Build or sync the graph
+    ├── First time:       smt build
+    ├── After commits:    smt diff HEAD~1..HEAD
+    └── Corrupt/broken:   smt build --clear
+```
+
+## Anti-Patterns
+
+- Do NOT use Bash find/grep for exploration — use `smt search` instead
+- Do NOT read full files before running `smt context`
+- Do NOT run `smt build` on every session — check `smt status` first
+
+## Tool Hierarchy
+
+1. **Tier 1 (first)** — `smt context`, `smt search`, `smt impact`
+2. **Tier 2 (validate)** — Grep, Glob (pattern matching)
+3. **Tier 3 (inspect)** — Read, Edit (when file path is known)
+4. **Tier 4 (avoid)** — Bash (find, grep for exploration)
+
+## Session Start
+
+```bash
+smt status          # Is the graph ready? (node count > 0)
+smt build           # If empty, build from src/
+smt diff            # If behind on commits, sync
+```
+"""
+
+_SKILL_PROJECT_ONBOARDING = """\
+# SMT Project Onboarding
+
+## Prerequisites
+
+- Docker Desktop installed and running
+- Python 3.10+
+- SMT installed (`python configure.py` in the SMT repo)
+
+## First-Time Setup (4 Steps)
+
+### Step 1: Start Neo4j
+```bash
+smt docker up
+# Wait ~10 seconds for Neo4j to start
+```
+
+### Step 2: Configure this project
+```bash
+smt setup --dir /path/to/this/project
+```
+This writes `.claude/` files including this skills directory.
+
+### Step 3: Build the graph
+```bash
+smt build
+# First build: 1-5 minutes depending on codebase size
+```
+
+### Step 4: Verify
+```bash
+smt status           # Should show: X nodes, Y edges
+smt onboard check    # Full health check
+```
+
+## Returning Sessions
+
+```bash
+smt status    # Is graph ready?
+smt diff      # Sync if commits happened since last build
+```
+
+## Troubleshooting
+
+**Graph not building?**
+- Check Neo4j is running: `smt docker status`
+- Verify src/ exists in this project
+- Check logs: `smt build` (or `docker logs save-my-tokens-neo4j`)
+
+**Getting file not found errors?**
+- Run `smt build --clear` to rebuild from scratch
+- Verify your codebase has Python or TypeScript files
+
+**Slow queries?**
+- Use smaller `--depth` values: `smt context <symbol> --depth 1`
+- Try `smt context <symbol> --compress` to remove bridge functions
+
+## Getting Help
+
+```bash
+smt --help           # Command reference
+smt onboard agent    # Agent orientation
+cat .claude/TOOLS.md # Quick reference table
+```
+
+---
+
+See also: `.claude/AGENT_INSTRUCTIONS.md` (tool hierarchy)
+"""
+
+_SKILL_GRAPH_MAINTENANCE = """\
+# SMT Graph Maintenance
+
+## Keeping the Graph Fresh
+
+The graph must be synced with git history to be accurate and prevent stale data from affecting queries.
+
+### Check freshness
+```bash
+smt status
+# Output shows: [✓] fresh  or  [!] 3 commits behind
+```
+
+### Sync after commits
+```bash
+smt diff                      # Sync last commit (default)
+smt diff HEAD~3..HEAD         # Sync last 3 commits
+smt sync                      # Alias for smt diff
+```
+
+## Automatic Sync (Git Hook)
+
+SMT can install a post-commit hook to sync the graph automatically:
+
+```bash
+smt hooks install    # Install hook
+smt hooks uninstall  # Remove hook
+```
+
+Once installed, the hook runs `smt diff HEAD~1..HEAD` after each commit.
+
+## Full Rebuild
+
+Use this when:
+- The graph is corrupt or shows incorrect dependencies
+- You made breaking changes to the codebase schema
+- Node count is unexpectedly low
+- Queries return wrong results
+
+```bash
+smt build --clear   # Wipes all nodes/edges and rebuilds from scratch
+smt status          # Confirm node count > 100
+```
+
+**Warning:** Full rebuild takes 1-5 minutes depending on codebase size.
+
+## Neo4j Container Management
+
+```bash
+smt docker up       # Start Neo4j container
+smt docker down     # Stop Neo4j container
+smt docker status   # Check container status
+```
+
+### Browser
+
+Access Neo4j browser at: **http://localhost:7474**
+- Username: `neo4j`
+- Password: (from `.env` file)
+
+Write Cypher queries to inspect the graph directly:
+```cypher
+MATCH (f:Function)-[:CALLS]->(g:Function)
+RETURN f.name, g.name LIMIT 10
+```
+
+## Graph Statistics
+
+```bash
+smt build --check   # Detailed breakdown:
+                    # - Node counts by type (Functions, Classes, etc.)
+                    # - Edge counts by type (CALLS, IMPORTS, etc.)
+                    # - Latest commit hash
+                    # - Freshness status
+```
+
+## Performance Tuning
+
+If graph queries are slow:
+- Reduce `--depth`: `smt context <symbol> --depth 1` instead of `--depth 3`
+- Use `--compress`: `smt context <symbol> --compress` to remove bridge functions
+- Check Neo4j memory: may need to increase in `docker-compose.yml`
+
+---
+
+For more help: `smt --help` or see `.claude/AGENT_INSTRUCTIONS.md`
+"""
+
+# ---------------------------------------------------------------------------
+# onboard
+# ---------------------------------------------------------------------------
+
+def cmd_onboard(action: str, target_dir: Optional[Path] = None) -> int:
+    """Guided onboarding: setup, orientation, or health check."""
+
+    if action == 'project':
+        # Guided project onboarding: docker up → wait → build → status
+        target = (target_dir or Path.cwd()).resolve()
+        print(f"\n{_C.BOLD}SMT Project Onboarding: {target.name}{_C.RESET}\n")
+
+        # Step 1: Docker up
+        print("Step 1/3  Starting Neo4j...")
+        result = subprocess.run(['smt', 'docker', 'up'], capture_output=True)
+        if result.returncode != 0:
+            _fail("docker up failed — is Docker Desktop running?")
+            print("  Fix: start Docker Desktop, then re-run: smt onboard project")
+            return 1
+        _ok("Docker up (waiting for Neo4j to be ready...)")
+
+        # Step 2: Wait for Neo4j to accept connections (poll up to 60s with exponential backoff)
+        import time
+        import urllib.request
+        neo4j_ready = False
+        max_wait = 60
+        elapsed = 0
+        attempt = 0
+        while elapsed < max_wait:
+            try:
+                urllib.request.urlopen('http://localhost:7474', timeout=2)
+                _ok("Neo4j reachable (http://localhost:7474)")
+                neo4j_ready = True
+                break
+            except Exception:
+                attempt += 1
+                # Exponential backoff: 0.5s, 1s, 2s, 4s, 8s... capped at 8s
+                wait_time = min(0.5 * (2 ** (attempt - 1)), 8)
+                elapsed += wait_time
+                if elapsed >= max_wait:
+                    break
+                time.sleep(wait_time)
+
+        if not neo4j_ready:
+            _fail(f"Neo4j did not become ready in {max_wait}s")
+            print("  Check: smt docker status")
+            print("  Logs:  docker logs save-my-tokens-neo4j")
+            return 1
+
+        # Step 3: Build graph
+        print("\nStep 2/3  Building graph from source...")
+        result = cmd_build(check=False, clear=False, target_dir=str(target))
+        if result != 0:
+            _fail("Graph build failed — check error above")
+            return 1
+
+        # Step 4: Status
+        print("\nStep 3/3  Verifying graph health...")
+        result = cmd_status()
+        if result != 0:
+            _fail("Status check failed")
+            return 1
+
+        print(f"\n{_C.GREEN}{_C.BOLD}Onboarding complete!{_C.RESET}")
+        print("\nNext steps:")
+        print("  smt context <SymbolName>   — explore a symbol's dependencies")
+        print("  smt search \"your query\"    — semantic search by meaning")
+        print("  smt impact <SymbolName>    — see what breaks if you change this")
+        print("  smt status                 — check graph health")
+        return 0
+
+    elif action == 'agent':
+        # Print agent orientation (no external deps needed)
+        orientation = f"""\
+
+{_C.BOLD}SMT AGENT ORIENTATION{_C.RESET}
+save-my-tokens (SMT) exposes a semantic Neo4j graph of this codebase.
+Use it instead of reading raw files.
+
+{_C.BOLD}QUERY DECISION TABLE{_C.RESET}
+Goal                          | Command
+------------------------------|------------------------------------------
+Understand what a symbol does | smt context <symbol>
+See dependencies (2+ hops)    | smt context <symbol> --depth 2
+See who calls a function      | smt callers <symbol>
+Find code by topic/meaning    | smt search "description"
+What breaks if I change this  | smt impact <symbol>
+Check graph health            | smt status
+Build graph from source       | smt build
+Sync after recent commits     | smt diff HEAD~1..HEAD
+Start Neo4j                   | smt docker up
+
+{_C.BOLD}TOOL HIERARCHY (use in order){_C.RESET}
+  Tier 1 (first)   — smt context / smt search / smt impact
+  Tier 2 (verify)  — Grep, Glob
+  Tier 3 (inspect) — Read (only after SMT locates the file)
+  Tier 4 (avoid)   — Bash find/grep for exploration
+
+{_C.BOLD}SESSION START CHECKLIST{_C.RESET}
+  smt status   → node count > 0? Graph is ready.
+  smt build    → if empty, build from src/
+  smt diff     → if stale, sync after recent commits
+
+{_C.BOLD}SKILLS FILES (in .claude/skills/){_C.RESET}
+  agent-query-guide.md    — full decision tree
+  graph-maintenance.md    — how to keep graph fresh
+  project-onboarding.md   — setup guide for first-time users
+"""
+        print(orientation)
+        return 0
+
+    elif action == 'check':
+        # Health check: works even before graph is built
+        print(f"\n{_C.BOLD}SMT Health Check{_C.RESET}\n")
+        exit_code = 0
+
+        # Check 1: Neo4j reachable
+        import urllib.request
+        try:
+            urllib.request.urlopen('http://localhost:7474', timeout=3)
+            _ok("Neo4j reachable (http://localhost:7474)")
+            neo4j_up = True
+        except Exception:
+            _fail("Neo4j not reachable — run: smt docker up")
+            neo4j_up = False
+            exit_code = 1
+
+        # Check 2: Graph non-empty (only if Neo4j is up)
+        if neo4j_up:
+            try:
+                client = _get_neo4j_client()
+                with client.driver.session() as session:
+                    result = session.run("MATCH (n) RETURN count(n) AS cnt")
+                    total = result.single()['cnt']
+                if total > 0:
+                    _ok(f"Graph has {total} nodes")
+                else:
+                    _warn("Graph is empty — run: smt build")
+                    exit_code = 1
+            except Exception as e:
+                _warn(f"Graph query failed: {str(e)[:80]}")
+                exit_code = 1
+        else:
+            _warn("Graph check skipped (Neo4j not running)")
+
+        # Check 3: Graph freshness (only if Neo4j is up)
+        if neo4j_up:
+            try:
+                from src.graph.validator import validate_graph
+                client = _get_neo4j_client()
+                repo_path = (target_dir or Path.cwd()).resolve()
+                v = validate_graph(client, repo_path)
+                if v.is_fresh:
+                    _ok(f"Graph is fresh (HEAD: {v.git_head})")
+                else:
+                    _warn(f"Graph is {v.commits_behind} commit(s) behind — run: smt diff")
+            except Exception as e:
+                _warn(f"Staleness check skipped: {str(e)[:80]}")
+
+        # Check 4: Embeddings model loadable
+        try:
+            result = subprocess.run(
+                [sys.executable, '-c', 'from sentence_transformers import SentenceTransformer'],
+                capture_output=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                _ok("sentence_transformers importable")
+            else:
+                _warn("sentence_transformers not importable — semantic search disabled")
+        except Exception:
+            _warn("sentence_transformers check timed out")
+
+        # Check 5: Skills directory
+        skills_dir = Path('.claude/skills')
+        if skills_dir.exists() and any(skills_dir.glob('*.md')):
+            skill_count = len(list(skills_dir.glob('*.md')))
+            _ok(f".claude/skills/ has {skill_count} skill file(s)")
+        else:
+            _warn(".claude/skills/ missing or empty — run: smt setup --dir .")
+
+        print()
+        return exit_code
+
+    else:
+        print(f"Unknown onboard action: {action}")
+        print("Usage: smt onboard project|agent|check [--dir PATH]")
+        return 1
+
+
+# ---------------------------------------------------------------------------
 # setup
 # ---------------------------------------------------------------------------
 
@@ -1062,6 +1487,19 @@ For more: `smt --help` or `cat .claude/SETUP.md`
         print("  README.md              [skipped — not found]")
 
     # ------------------------------------------------------------------
+    # 2.9. .claude/skills/ — composable skill files for agents
+    # ------------------------------------------------------------------
+    skills_dir = claude_dir / 'skills'
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for filename, content in [
+        ('agent-query-guide.md', _SKILL_AGENT_QUERY_GUIDE),
+        ('project-onboarding.md', _SKILL_PROJECT_ONBOARDING),
+        ('graph-maintenance.md', _SKILL_GRAPH_MAINTENANCE),
+    ]:
+        (skills_dir / filename).write_text(content, encoding='utf-8')
+    print(f"  .claude/skills/        [OK] — 3 skill files written")
+
+    # ------------------------------------------------------------------
     # 3. CLAUDE.md — tells Claude how to work in this project
     # ------------------------------------------------------------------
     claude_md = target_dir / 'CLAUDE.md'
@@ -1302,6 +1740,7 @@ commands:
   docker up|down|status  Manage Neo4j container
   status                 Graph health check
   setup [--dir <path>]   Configure a project
+  onboard project|agent|check Guided setup and orientation
         """
     )
 
@@ -1367,6 +1806,12 @@ commands:
     p_hooks.add_argument('action', choices=['install', 'uninstall'], help='Hook action')
     p_hooks.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
 
+    # onboard
+    p_onboard = sub.add_parser('onboard', help='Guided setup and orientation')
+    p_onboard.add_argument('action', choices=['project', 'agent', 'check'],
+                           help='project=guided setup, agent=orientation, check=health check')
+    p_onboard.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
+
     args = parser.parse_args()
 
     if args.command == 'build':
@@ -1410,6 +1855,9 @@ commands:
             except Exception as e:
                 print(f"ERROR: Failed to remove hook: {e}")
                 return 1
+    elif args.command == 'onboard':
+        target_dir = Path(args.dir) if args.dir else None
+        return cmd_onboard(args.action, target_dir=target_dir)
     else:
         parser.print_help()
         return 0
