@@ -26,14 +26,14 @@ def print_header(text: str) -> None:
 
 def print_pass(text: str) -> None:
     """Print a passing check."""
-    print(f"{Colors.GREEN}[OK]{Colors.RESET} {text}")
+    print(f"{Colors.GREEN}[OK]{Colors.RESET} {text}", flush=True)
 
 
 def print_fail(text: str) -> None:
     """Print a failing check."""
-    print(f"{Colors.RED}[FAIL]{Colors.RESET} {text}")
+    print(f"{Colors.RED}[FAIL]{Colors.RESET} {text}", flush=True)
 
 
 def print_warn(text: str) -> None:
     """Print a warning."""
-    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {text}")
+    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {text}", flush=True)

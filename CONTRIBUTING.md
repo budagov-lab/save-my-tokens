@@ -168,7 +168,7 @@ logging.basicConfig(level=logging.DEBUG)
 - **Connection pooling** — CLI reuses single Neo4j connection
 - **Query optimization** — See OPTIMIZATION_FINDINGS.md for Cypher tuning
 - **Cycle detection** — Tarjan's is O(V+E), fast even for 10k+ nodes
-- **Large graphs** — Tested up to 40k+ nodes, sub-30ms queries
+- **Large graphs** — Tested up to 40k+ nodes
 
 ## Commit Messages
 

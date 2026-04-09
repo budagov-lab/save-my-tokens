@@ -826,218 +826,62 @@ def _git_initial_commit(target_dir: Path) -> None:
     print("  git commit             [OK] — Graph state anchored in git history")
 
 
-# ---------------------------------------------------------------------------
-# Skill markdown constants (for .claude/skills/ directory)
-# ---------------------------------------------------------------------------
-
-_SKILL_AGENT_QUERY_GUIDE = """\
-# SMT Agent Query Guide
-
-Use this file to decide which SMT command to run.
-
-## Decision Tree
-
-```
-What do you need?
-├── Understand what a symbol does
-│   └── smt context <symbol>
-│       └── Need deeper dependency chain?
-│           └── smt context <symbol> --depth 2
-├── See who calls a function
-│   └── smt callers <symbol>
-├── Find code by meaning or topic
-│   └── smt search "description"
-├── Analyze impact of a change
-│   └── smt impact <symbol>
-│       └── Need wider blast radius?
-│           └── smt impact <symbol> --depth 5
-├── Check graph health
-│   └── smt status
-└── Build or sync the graph
-    ├── First time:       smt build
-    ├── After commits:    smt diff HEAD~1..HEAD
-    └── Corrupt/broken:   smt build --clear
-```
-
-## Anti-Patterns
-
-- Do NOT use Bash find/grep for exploration — use `smt search` instead
-- Do NOT read full files before running `smt context`
-- Do NOT run `smt build` on every session — check `smt status` first
-
-## Tool Hierarchy
-
-1. **Tier 1 (first)** — `smt context`, `smt search`, `smt impact`
-2. **Tier 2 (validate)** — Grep, Glob (pattern matching)
-3. **Tier 3 (inspect)** — Read, Edit (when file path is known)
-4. **Tier 4 (avoid)** — Bash (find, grep for exploration)
-
-## Session Start
-
-```bash
-smt status          # Is the graph ready? (node count > 0)
-smt build           # If empty, build from src/
-smt diff            # If behind on commits, sync
-```
-"""
-
-_SKILL_PROJECT_ONBOARDING = """\
-# SMT Project Onboarding
-
-## Prerequisites
-
-- Docker Desktop installed and running
-- Python 3.10+
-- SMT installed (`python configure.py` in the SMT repo)
-
-## First-Time Setup (4 Steps)
-
-### Step 1: Start Neo4j
-```bash
-smt docker up
-# Wait ~10 seconds for Neo4j to start
-```
-
-### Step 2: Configure this project
-```bash
-smt setup --dir /path/to/this/project
-```
-This writes `.claude/` files including this skills directory.
-
-### Step 3: Build the graph
-```bash
-smt build
-# First build: 1-5 minutes depending on codebase size
-```
-
-### Step 4: Verify
-```bash
-smt status           # Should show: X nodes, Y edges
-smt onboard check    # Full health check
-```
-
-## Returning Sessions
-
-```bash
-smt status    # Is graph ready?
-smt diff      # Sync if commits happened since last build
-```
-
-## Troubleshooting
-
-**Graph not building?**
-- Check Neo4j is running: `smt docker status`
-- Verify src/ exists in this project
-- Check logs: `smt build` (or `docker logs save-my-tokens-neo4j`)
-
-**Getting file not found errors?**
-- Run `smt build --clear` to rebuild from scratch
-- Verify your codebase has Python or TypeScript files
-
-**Slow queries?**
-- Use smaller `--depth` values: `smt context <symbol> --depth 1`
-- Try `smt context <symbol> --compress` to remove bridge functions
-
-## Getting Help
-
-```bash
-smt --help           # Command reference
-smt onboard agent    # Agent orientation
-cat .claude/TOOLS.md # Quick reference table
-```
-
----
-
-See also: `.claude/AGENT_INSTRUCTIONS.md` (tool hierarchy)
-"""
-
-_SKILL_GRAPH_MAINTENANCE = """\
-# SMT Graph Maintenance
-
-## Keeping the Graph Fresh
-
-The graph must be synced with git history to be accurate and prevent stale data from affecting queries.
-
-### Check freshness
-```bash
-smt status
-# Output shows: [✓] fresh  or  [!] 3 commits behind
-```
-
-### Sync after commits
-```bash
-smt diff                      # Sync last commit (default)
-smt diff HEAD~3..HEAD         # Sync last 3 commits
-smt sync                      # Alias for smt diff
-```
-
-## Automatic Sync (Git Hook)
-
-SMT can install a post-commit hook to sync the graph automatically:
-
-```bash
-smt hooks install    # Install hook
-smt hooks uninstall  # Remove hook
-```
-
-Once installed, the hook runs `smt diff HEAD~1..HEAD` after each commit.
-
-## Full Rebuild
-
-Use this when:
-- The graph is corrupt or shows incorrect dependencies
-- You made breaking changes to the codebase schema
-- Node count is unexpectedly low
-- Queries return wrong results
-
-```bash
-smt build --clear   # Wipes all nodes/edges and rebuilds from scratch
-smt status          # Confirm node count > 100
-```
-
-**Warning:** Full rebuild takes 1-5 minutes depending on codebase size.
-
-## Neo4j Container Management
-
-```bash
-smt docker up       # Start Neo4j container
-smt docker down     # Stop Neo4j container
-smt docker status   # Check container status
-```
-
-### Browser
-
-Access Neo4j browser at: **http://localhost:7474**
-- Username: `neo4j`
-- Password: (from `.env` file)
-
-Write Cypher queries to inspect the graph directly:
-```cypher
-MATCH (f:Function)-[:CALLS]->(g:Function)
-RETURN f.name, g.name LIMIT 10
-```
-
-## Graph Statistics
-
-```bash
-smt build --check   # Detailed breakdown:
-                    # - Node counts by type (Functions, Classes, etc.)
-                    # - Edge counts by type (CALLS, IMPORTS, etc.)
-                    # - Latest commit hash
-                    # - Freshness status
-```
-
-## Performance Tuning
-
-If graph queries are slow:
-- Reduce `--depth`: `smt context <symbol> --depth 1` instead of `--depth 3`
-- Use `--compress`: `smt context <symbol> --compress` to remove bridge functions
-- Check Neo4j memory: may need to increase in `docker-compose.yml`
-
----
-
-For more help: `smt --help` or see `.claude/AGENT_INSTRUCTIONS.md`
-"""
+# A2A agent card written to .claude/a2a/smt.json in target projects
+_A2A_AGENT_CARD = {
+    "name": "save-my-tokens",
+    "description": (
+        "Semantic code graph for efficient codebase exploration. "
+        "Provides symbol lookup, dependency analysis, impact assessment, "
+        "and semantic search via the smt CLI."
+    ),
+    "url": "local://smt-cli",
+    "version": "1.0.0",
+    "onboard": "cat .claude/a2a/smt-onboard.md",
+    "capabilities": {
+        "streaming": False,
+        "pushNotifications": False,
+        "stateTransitionHistory": False,
+    },
+    "skills": [
+        {
+            "id": "smt-definition",
+            "name": "Symbol Definition",
+            "description": "What is this symbol? Signature, docstring, immediate callees.",
+            "invoke": "smt definition <symbol>",
+        },
+        {
+            "id": "smt-context",
+            "name": "Symbol Context",
+            "description": "What do I need to work on this? Symbol + N-hop callees + callers.",
+            "invoke": "smt context <symbol> [--depth N] [--compress]",
+        },
+        {
+            "id": "smt-impact",
+            "name": "Change Impact Analysis",
+            "description": "What breaks if I change this? All callers grouped by distance.",
+            "invoke": "smt impact <symbol> [--depth N]",
+        },
+        {
+            "id": "smt-search",
+            "name": "Semantic Code Search",
+            "description": "Find symbols by meaning using local embeddings. No API calls.",
+            "invoke": 'smt search "<query>"',
+        },
+        {
+            "id": "smt-status",
+            "name": "Graph Health Check",
+            "description": "Graph freshness, node/edge counts, git alignment. Run at session start.",
+            "invoke": "smt status",
+        },
+        {
+            "id": "smt-analysis",
+            "name": "Multi-Agent Analysis Harness",
+            "description": "Scout + Fabler + PathFinder for deep impact/isolation analysis.",
+            "invoke": "/smt-analysis",
+        },
+    ],
+    "authentication": {"schemes": []},
+}
 
 # ---------------------------------------------------------------------------
 # onboard
@@ -1280,224 +1124,30 @@ def cmd_setup(target_dir: Path) -> int:
     print("  .claude/settings.json  [OK]")
 
     # ------------------------------------------------------------------
-    # 2. .claude/TOOLS.md  — smt quick reference for Claude
-    # ------------------------------------------------------------------
-    tools_md = claude_dir / 'TOOLS.md'
-    tools_content = """\
-# SMT CLI — Quick Reference
-
-Use `smt` commands via Bash instead of reading/grepping source files.
-
----
-
-## Decision Table
-
-| You want to...                          | Run this                              |
-|-----------------------------------------|---------------------------------------|
-| Understand what a function does         | `smt context <symbol>`                |
-| See what a function depends on          | `smt context <symbol> --depth 2`      |
-| See who calls a function                | `smt callers <symbol>`                |
-| Find code by meaning / topic            | `smt search "description"`            |
-| Check graph health                      | `smt status`                          |
-| Build graph from source                 | `smt build`                           |
-| Wipe and rebuild                        | `smt build --clear`                   |
-| Sync graph after a commit               | `smt diff HEAD~1..HEAD`               |
-| Start Neo4j                             | `smt docker up`                       |
-
----
-
-## Session Start Checklist
-
-```bash
-smt status          # node count > 100? Graph is ready.
-smt build           # if empty — build from src/
-smt diff            # if stale — sync with recent commits
-```
-
-## Hard Restart (graph broken / corrupted)
-
-```bash
-smt build --clear   # wipes all nodes/edges and rebuilds from source
-smt status          # confirm node count > 100
-```
-"""
-    with open(tools_md, 'w', encoding='utf-8') as f:
-        f.write(tools_content)
-    print("  .claude/TOOLS.md       [OK]")
-
-    # ------------------------------------------------------------------
-    # 2.5. .claude/SETUP.md — simple quick-start guide
-    # ------------------------------------------------------------------
-    setup_md = claude_dir / 'SETUP.md'
-    setup_content = """\
-# SMT Quick Start
-
-This repository uses **save-my-tokens (SMT)** for intelligent code analysis.
-
-## Basic Commands
-
-```bash
-smt status                       # Check graph health
-smt definition <symbol>          # What is this symbol?
-smt context <symbol>             # What code do I need to understand this?
-smt context <symbol> --depth 2   # Deeper context (dependencies)
-smt impact <symbol>              # What breaks if I change this?
-smt search "<query>"             # Semantic search
-smt callers <symbol>             # Who calls this?
-```
-
-## Why Use SMT?
-
-- **Fast** — Sub-20ms queries even on large codebases
-- **Token efficient** — 60-90% reduction vs reading raw files
-- **Structure-aware** — Understands calls, definitions, dependencies
-
-## Examples
-
-```bash
-# Understand a module
-smt context QueryEngine --depth 2
-
-# Find impact of changes
-smt impact Neo4jClient --depth 3
-
-# Search by meaning
-smt search "cycle detection"
-```
-
-## First Time?
-
-```bash
-smt status          # Verify graph is loaded (should show: X nodes, Y edges)
-smt build           # Build if graph is empty
-```
-
-For more: `smt --help` or `cat .claude/TOOLS.md`
-"""
-    with open(setup_md, 'w', encoding='utf-8') as f:
-        f.write(setup_content)
-    print("  .claude/SETUP.md       [OK]")
-
-    # ------------------------------------------------------------------
-    # 2.7. .claude/AGENT_INSTRUCTIONS.md — SMT-First tool hierarchy for agents
-    # ------------------------------------------------------------------
-    agent_instructions_md = claude_dir / 'AGENT_INSTRUCTIONS.md'
-    agent_instructions_content = """\
-# SMT-First Agent Instruction Pattern
-
-When agents are spawned in this codebase, they should prefer semantic tools over raw file exploration.
-
-**IMPORTANT:** SMT commands are invoked via Bash. Examples:
-```bash
-smt status                          # Check if graph is ready
-smt context QueryEngine             # Get context for a symbol
-smt search "agent loop"             # Semantic search
-smt impact Neo4jClient --depth 3    # Impact analysis
-```
-
-## Tool Hierarchy (in order of preference)
-
-### Tier 1: Semantic Tools (Use FIRST)
-**Implementation:** Run via `Bash("smt context ...")` or similar
-
-- `bash: smt context <symbol>` — Get function + dependencies + callers
-  - Example: `Bash("smt context QueryEngine")`
-- `bash: smt search "<query>"` — Find related code by semantic meaning
-  - Example: `Bash("smt search 'agent loop'")`
-- `bash: smt impact <symbol>` — Analyze breaking changes
-  - Example: `Bash("smt impact Neo4jClient --depth 3")`
-
-### Tier 2: Pattern Tools (Use for validation)
-- `Grep(pattern)` — Verify SMT results, exact matches
-- `Glob(pattern)` — List files by pattern
-
-### Tier 3: File Operations (Use when path known)
-- `Read(file)` — Examine full file (only after SMT/Grep locate it)
-- `Edit(file)` — Make changes
-
-### Tier 4: Shell (Avoid)
-- `Bash` — Only when no other tool applies (don't use for find/grep/locate)
-
-## Decision Rules
-
-| Query | Use | Why | Example |
-|-------|-----|-----|---------|
-| "Find X" / "Where is X" | `smt search` or `smt context` | Semantic understanding | `Bash("smt search 'authentication'")`|
-| "Does X call Y?" | `smt impact` | Built-in caller graph | `Bash("smt impact X --depth 3")` |
-| "Verify location" | `Grep` | Fast pattern validation | `Grep("FunctionName")` |
-| "Show me code" | `Read` | Only after SMT locates it | `Read(file_path)` |
-
-## Anti-Patterns (DO NOT)
-
-❌ Use Bash find/grep/locate (use `smt search` instead)
-❌ Read entire files without SMT first (run `smt context` first)
-❌ Iterate files manually (use `smt search` once with Bash)
-❌ Use Grep for exploratory queries (SMT is 10x more efficient)
-
-## Token Savings
-
-- SMT-first approach: 200-300 tokens for architecture understanding
-- Raw file reading: 500-1000+ tokens for same understanding
-- **Savings: 60-80% token reduction by avoiding manual file reads**
-
-## Quick Start
-
-```bash
-# Verify graph is ready
-Bash("smt status")
-
-# Exploratory: find "auth middleware"
-Bash("smt search 'authentication middleware'")
-
-# Get context: understand a symbol
-Bash("smt context QueryEngine")
-
-# Analyze impact: what breaks if I change X
-Bash("smt impact Neo4jClient --depth 3")
-
-# Verification: confirm exact location
-Grep("function_name")
-
-# Final inspection: see full code
-Read("src/file.ts")
-```
-
-For more: `smt --help` or `cat .claude/SETUP.md`
-"""
-    with open(agent_instructions_md, 'w', encoding='utf-8') as f:
-        f.write(agent_instructions_content)
-    print("  .claude/AGENT_INSTRUCTIONS.md [OK]")
-
-    # ------------------------------------------------------------------
-    # 2.8. Append SMT hint to README.md (if exists)
-    # ------------------------------------------------------------------
-    readme_file = target_dir / 'README.md'
-    if readme_file.exists():
-        try:
-            readme_content = readme_file.read_text(encoding='utf-8')
-            smt_hint = "\n## Code Analysis\n\nThis repository is indexed with **SMT** (save-my-tokens). Use `smt --help` to explore code structure efficiently.\n"
-            if 'smt --help' not in readme_content and 'save-my-tokens' not in readme_content:
-                readme_file.write_text(readme_content + smt_hint, encoding='utf-8')
-                print("  README.md              [OK] — SMT hint appended")
-            else:
-                print("  README.md              [skipped — SMT hint already present]")
-        except Exception as e:
-            print(f"  README.md              [WARN] — Could not append hint: {e}")
-    else:
-        print("  README.md              [skipped — not found]")
-
-    # ------------------------------------------------------------------
-    # 2.9. .claude/skills/ — composable skill files for agents
+    # 2. .claude/skills/smt-analysis/ — copy the full harness from SMT repo
     # ------------------------------------------------------------------
     skills_dir = claude_dir / 'skills'
-    skills_dir.mkdir(parents=True, exist_ok=True)
-    for filename, content in [
-        ('agent-query-guide.md', _SKILL_AGENT_QUERY_GUIDE),
-        ('project-onboarding.md', _SKILL_PROJECT_ONBOARDING),
-        ('graph-maintenance.md', _SKILL_GRAPH_MAINTENANCE),
-    ]:
-        (skills_dir / filename).write_text(content, encoding='utf-8')
-    print(f"  .claude/skills/        [OK] — 3 skill files written")
+    smt_skill_src = SMT_DIR / '.claude' / 'skills' / 'smt-analysis'
+    smt_skill_dst = skills_dir / 'smt-analysis'
+    if smt_skill_src.exists():
+        smt_skill_dst.mkdir(parents=True, exist_ok=True)
+        copied = []
+        for src_file in smt_skill_src.iterdir():
+            if src_file.is_file():
+                (smt_skill_dst / src_file.name).write_bytes(src_file.read_bytes())
+                copied.append(src_file.name)
+        print(f"  .claude/skills/smt-analysis/ [OK] — {len(copied)} files")
+    else:
+        print(f"  .claude/skills/smt-analysis/ [SKIP] — source not found at {smt_skill_src}")
+
+    # ------------------------------------------------------------------
+    # 2.5. .claude/a2a/smt.json — A2A agent card
+    # ------------------------------------------------------------------
+    a2a_dir = claude_dir / 'a2a'
+    a2a_dir.mkdir(parents=True, exist_ok=True)
+    with open(a2a_dir / 'smt.json', 'w', encoding='utf-8') as f:
+        json.dump(_A2A_AGENT_CARD, f, indent=2)
+    print("  .claude/a2a/smt.json   [OK]")
 
     # ------------------------------------------------------------------
     # 3. CLAUDE.md — tells Claude how to work in this project
@@ -1524,35 +1174,26 @@ smt status                      # check graph health
 ### Session start
 
 ```bash
+smt docker up   # if Neo4j isn't running
 smt status      # is the graph ready? (node count > 0)
 smt build       # build if empty
 smt diff        # sync if stale after recent commits
 ```
 
-### Agent Tool Hierarchy
+### Tool order
 
-**For spawned agents/subagents**, see `.claude/AGENT_INSTRUCTIONS.md` for the tool priority system:
-1. **Tier 1 (SMT)** — Use first: `smt context`, `smt search`, `smt impact`
-2. **Tier 2 (Pattern)** — Use for validation: `Grep`, `Glob`
-3. **Tier 3 (File)** — Use when path known: `Read`, `Edit`
-4. **Tier 4 (Shell)** — Avoid: `Bash`
+`smt context` / `smt search` → Grep → Read. Only open a file when SMT doesn't give enough detail.
 
-This hierarchy is **mandatory** for all code exploration in this repository.
+### New agent? Start here:
 
-### When to read files directly
-
-Only read a file when:
-- `smt context` doesn't return enough detail (e.g. need to see the full function body)
-- You are writing new code and need the exact surrounding lines
+```bash
+cat .claude/skills/smt-analysis/a2a-onboard.md
+```
 
 ### Project: {project_name}
 
 SMT is installed at: `{SMT_DIR}`
 Neo4j browser: http://localhost:7474
-
----
-
-See also: `.claude/SETUP.md` (quick reference), `.claude/AGENT_INSTRUCTIONS.md` (tool hierarchy)
 """
         with open(claude_md, 'w', encoding='utf-8') as f:
             f.write(claude_md_content)

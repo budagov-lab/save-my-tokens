@@ -56,21 +56,13 @@ smt impact Neo4jClient --depth 3
 git clone https://github.com/budagov-lab/save-my-tokens
 cd save-my-tokens
 
-# Step 1: Create virtual environment
-python setup.py
-# → Creates venv/ if needed, then shows activation command
-
-# Step 2: Activate and run setup inside venv
-venv\Scripts\activate          # Windows
-# or: source venv/bin/activate  # Mac/Linux
-
-python setup.py
-# → Now runs full setup:
+python install.py
+# → Creates venv/, bootstraps pip, then runs full setup:
 #   • Checks Python 3.11+ and docker-compose
 #   • Installs all dependencies (isolated in venv)
 #   • Creates .env configuration
 #   • Starts Neo4j in Docker
-#   (Takes 5-10 minutes on first run)
+#   (Takes 5-10 minutes on first run — torch is ~2GB)
 ```
 
 ### Build Your Code Graph

@@ -15,6 +15,7 @@ After this, user can run: smt build
 
 import sys
 import subprocess
+import shutil
 import time
 import urllib.request
 from pathlib import Path
@@ -115,10 +116,12 @@ def step_install_packages() -> bool:
     project_dir = Path(__file__).parent
 
     print("  Running: pip install -e '.[full]'")
-    print("  (You will see download progress, compilation status, etc.)\n")
+    print("  NOTE: This installs torch (~2GB). It will look stuck for several minutes.")
+    print("  Do NOT cancel — let it finish.\n")
 
-    # Run pip with FULL OUTPUT visible to user
-    # No capture, no quiet mode — everything is shown in real-time
+    # Run pip with output visible to user. stdout.flush() prevents interleaving
+    # with parent-process buffered output on Windows.
+    sys.stdout.flush()
     result = subprocess.run(
         [sys.executable, '-m', 'pip', 'install', '-e', '.[full]'],
         cwd=project_dir,
@@ -155,7 +158,18 @@ def step_start_neo4j() -> bool:
 
     project_dir = Path(__file__).parent
 
-    print("  Starting docker-compose up -d neo4j...", end=" ", flush=True)
+    # Tear down any stale containers (preserves named volumes / data)
+    # This fixes the "Neo4j already running (pid:X)" error from stale PID files
+    print("  Removing stale containers...", end=" ", flush=True)
+    subprocess.run(
+        ['docker-compose', 'down'],
+        cwd=project_dir,
+        capture_output=True,
+        timeout=30
+    )
+    print_pass("done")
+
+    print("  Starting Neo4j container...", end=" ", flush=True)
     result = subprocess.run(
         ['docker-compose', 'up', '-d', 'neo4j'],
         cwd=project_dir,
@@ -164,24 +178,23 @@ def step_start_neo4j() -> bool:
     )
     if result.returncode != 0:
         print_fail("failed")
-        if result.stderr:
-            print(f"    {result.stderr.decode()[:200]}")
+        stderr = result.stderr.decode(errors='replace')
+        if stderr:
+            print(f"    {stderr[:300]}")
         return False
     print_pass("container started")
 
-    # Wait for Neo4j readiness
-    print("  Waiting for Neo4j to be ready...", end=" ", flush=True)
-    max_wait = 60
-    elapsed = 0
+    # Wait for Neo4j HTTP endpoint — first boot can take 90+ seconds
+    print("  Waiting for Neo4j to be ready (up to 120s)...", end=" ", flush=True)
+    max_wait = 120
     neo4j_ok = False
 
-    for attempt in range(max_wait):
+    for elapsed in range(max_wait):
         try:
             urllib.request.urlopen('http://localhost:7474', timeout=2)
             neo4j_ok = True
             break
         except Exception:
-            elapsed = attempt + 1
             time.sleep(1)
 
     if neo4j_ok:
@@ -194,99 +207,119 @@ def step_start_neo4j() -> bool:
     return True
 
 
+def _venv_python(venv_dir: Path) -> Path:
+    """Return path to python executable inside a venv."""
+    if sys.platform == 'win32':
+        return venv_dir / 'Scripts' / 'python.exe'
+    return venv_dir / 'bin' / 'python'
+
+
+def _remove_broken_venv(venv_dir: Path) -> None:
+    """Delete a broken venv directory so the next run starts clean."""
+    print(f"  Removing broken venv at {venv_dir} ...")
+    shutil.rmtree(venv_dir, ignore_errors=True)
+    if venv_dir.exists():
+        print_warn("Could not remove venv automatically. Delete it manually:")
+        print(f"    rmdir /s /q venv   (Windows)")
+        print(f"    rm -rf venv        (Mac/Linux)")
+
+
 def step_setup_venv() -> bool:
-    """Step 0: Create/activate virtual environment if needed"""
+    """Step 0: Create virtual environment, bootstrap pip, then self-reinvoke."""
     print_header("Step 0: Virtual Environment")
 
     project_dir = Path(__file__).parent
     venv_dir = project_dir / 'venv'
 
-    # Check if venv already exists
+    # --- Already exists: check health, reinvoke or recreate ---
     if venv_dir.exists():
-        print_pass("venv already exists")
-        print("\n  To use it, run:")
-        if sys.platform == 'win32':
-            print(f"    venv\\Scripts\\activate")
-        else:
-            print(f"    source venv/bin/activate")
-        return True
+        python = _venv_python(venv_dir)
+        healthy = False
+        if python.exists():
+            pip_check = subprocess.run(
+                [str(python), '-m', 'pip', '--version'],
+                capture_output=True, timeout=10
+            )
+            healthy = pip_check.returncode == 0
 
-    # Create venv
-    print("  Creating virtual environment...")
-    print(f"  Path: {venv_dir}")
-    print("  (Running: python -m venv venv)\n")
+        if healthy:
+            # Healthy venv — reinvoke setup inside it (transparent to user)
+            print_pass("venv exists and has pip — continuing inside it...")
+            sys.stdout.flush()
+            result = subprocess.run([str(python), __file__])
+            sys.exit(result.returncode)
+
+        # Broken or incomplete venv — delete and fall through to create fresh
+        print_warn("venv exists but is broken — recreating...")
+        _remove_broken_venv(venv_dir)
+        if venv_dir.exists():
+            print_fail("Could not remove broken venv. Delete it manually and re-run:")
+            print("    rmdir /s /q venv   (Windows)")
+            print("    rm -rf venv        (Mac/Linux)")
+            return False
+        print_pass("broken venv removed")
+
+    # --- Create bare venv (no --upgrade-deps: avoids silent network hang) ---
+    print(f"  Creating virtual environment at {venv_dir}")
+    print("  (Running: python -m venv venv — no network needed)\n", flush=True)
 
     try:
         result = subprocess.run(
-            [sys.executable, '-m', 'venv', str(venv_dir), '--copies'],
+            [sys.executable, '-m', 'venv', str(venv_dir)],
             cwd=project_dir,
-            capture_output=True,
-            text=True,
-            timeout=120  # 2 minute timeout
+            timeout=60,
         )
-
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print("  STDERR:", result.stderr)
-
     except subprocess.TimeoutExpired:
-        print_fail("venv creation timed out (>2 min)")
+        print_fail("venv creation timed out (>60s)")
         print("    Possible causes: slow disk, anti-virus scanning, permissions")
-        print("    Try manually in terminal: python -m venv venv")
+        shutil.rmtree(venv_dir, ignore_errors=True)
         return False
     except Exception as e:
         print_fail(f"venv creation error: {e}")
         return False
 
-    # Check if venv was actually created
-    if not venv_dir.exists():
-        print_fail("venv directory was not created")
-        if result.returncode != 0:
-            print(f"  Error: {result.stderr}")
-        print("  Try manually: python -m venv venv")
+    if result.returncode != 0 or not venv_dir.exists():
+        print_fail("venv creation failed")
+        shutil.rmtree(venv_dir, ignore_errors=True)
         return False
 
-    if result.returncode != 0:
-        print_fail(f"venv creation failed with code {result.returncode}")
-        if result.stderr:
-            print(f"  Error: {result.stderr}")
-        print("  Try manually: python -m venv venv")
-        return False
-
-    print_pass("venv created")
-
-    # Ensure pip is installed in venv
-    print("  Installing pip...", end=" ", flush=True)
-    if sys.platform == 'win32':
-        venv_python = venv_dir / 'Scripts' / 'python.exe'
-    else:
-        venv_python = venv_dir / 'bin' / 'python'
-
-    result = subprocess.run(
-        [str(venv_python), '-m', 'ensurepip', '--upgrade'],
-        capture_output=True,
-        timeout=60
+    # --- Bootstrap pip via ensurepip (offline, uses Python's bundled pip) ---
+    python = _venv_python(venv_dir)
+    print("  Bootstrapping pip (offline, no network)...", end=" ", flush=True)
+    ensurepip = subprocess.run(
+        [str(python), '-m', 'ensurepip', '--upgrade'],
+        capture_output=True, timeout=30
     )
+    if ensurepip.returncode != 0:
+        print_fail("ensurepip failed")
+        err = ensurepip.stderr.decode(errors='replace').strip()
+        if err:
+            print(f"    {err}")
+        print()
+        print("    This usually means your Python is missing ensurepip.")
+        print("    MS Store Python does not include it.")
+        print("    Fix: install Python from https://python.org/downloads/")
+        _remove_broken_venv(venv_dir)
+        return False
+    print_pass("pip bootstrapped")
 
-    if result.returncode == 0:
-        print_pass("OK")
-    else:
-        print_fail(f"pip install failed")
-        print(f"    {result.stderr.decode() if result.stderr else 'Unknown error'}")
+    # --- Final sanity check ---
+    pip_check = subprocess.run(
+        [str(python), '-m', 'pip', '--version'],
+        capture_output=True, timeout=10
+    )
+    if pip_check.returncode != 0:
+        print_fail("pip still not working after ensurepip")
+        _remove_broken_venv(venv_dir)
         return False
 
     print_pass("Virtual environment ready")
 
-    print("\n  To continue setup, activate the virtual environment:\n")
-    if sys.platform == 'win32':
-        print(f"    venv\\Scripts\\activate")
-        print(f"    python setup.py\n")
-    else:
-        print(f"    source venv/bin/activate")
-        print(f"    python setup.py\n")
-
-    return True
+    # --- Self-reinvoke inside the new venv — no manual activation needed ---
+    print("\n  Restarting setup inside virtual environment...\n", flush=True)
+    sys.stdout.flush()
+    result = subprocess.run([str(python), __file__])
+    sys.exit(result.returncode)
 
 
 def main() -> bool:
@@ -300,39 +333,37 @@ def main() -> bool:
         hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
     )
 
-    # If in venv, verify pip works
-    if in_venv:
-        print("  ✓ Running in virtual environment")
-        result = subprocess.run(
-            [sys.executable, '-m', 'pip', '--version'],
-            capture_output=True,
-            timeout=10
-        )
-        if result.returncode != 0:
-            print_fail("pip is broken in venv!")
-            print("\n  Fix: Delete and recreate venv:")
-            if sys.platform == 'win32':
-                print("    rmdir /s /q venv")
-            else:
-                print("    rm -rf venv")
-            print("    python setup.py")
-            return False
-        print()
-
     if not in_venv:
-        print("  ⚠️  Not running in a virtual environment")
-        print("  Creating one automatically...\n")
+        # step_setup_venv() creates the venv then calls sys.exit() after
+        # re-invoking install.py inside it — so this path never returns True.
         ok = step_setup_venv()
         if not ok:
             return False
-        print("\n  Please activate the virtual environment and run setup again:")
-        if sys.platform == 'win32':
-            print("    venv\\Scripts\\activate")
-            print("    python setup.py")
-        else:
-            print("    source venv/bin/activate")
-            print("    python setup.py")
+        # Should be unreachable (step_setup_venv exits via sys.exit)
         return False
+
+    # Running inside a venv — verify pip is functional before proceeding
+    print("  Running inside virtual environment")
+    pip_check = subprocess.run(
+        [sys.executable, '-m', 'pip', '--version'],
+        capture_output=True,
+        timeout=10
+    )
+    if pip_check.returncode != 0:
+        print_fail("pip is broken in this venv!")
+        print()
+        # Auto-delete the broken project-local venv so the next run recreates it.
+        # We can't self-reinvoke here because sys.executable IS the broken venv python.
+        project_dir = Path(__file__).parent
+        venv_dir = project_dir / 'venv'
+        if venv_dir.exists():
+            _remove_broken_venv(venv_dir)
+            print()
+        print("  Deactivate this venv, then re-run install.py with your system Python:")
+        print("    deactivate")
+        print("    python install.py")
+        return False
+    print()
 
     steps = [
         ("Python 3.11+", step_check_python),
@@ -351,7 +382,7 @@ def main() -> bool:
 
         if not ok:
             print(f"\n{Colors.RED}{Colors.BOLD}BLOCKED at {name}{Colors.RESET}")
-            print("Fix the issue above and re-run: python setup.py\n")
+            print("Fix the issue above and re-run: python install.py\n")
             return False
 
     # Success

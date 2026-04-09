@@ -144,6 +144,29 @@ All subagents return one of these:
 
 ---
 
+## A2A Connection Setup
+
+When setting up SMT in a **new project**, run:
+
+```bash
+smt setup --dir /path/to/project
+```
+
+This writes `.claude/a2a/smt.json` (connection reference) and `.claude/a2a/smt-onboard.md`
+(30-second quick-start) into the target project.
+
+**New agents** in that project should start with:
+
+```bash
+# Fast onboarding (30-second read)
+cat .claude/a2a/smt-onboard.md
+
+# Full capability reference
+cat .claude/a2a/smt.json
+```
+
+---
+
 ## Integration with Claude Code
 
 This skill is invoked via:

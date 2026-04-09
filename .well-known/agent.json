@@ -1,0 +1,77 @@
+{
+  "name": "save-my-tokens",
+  "description": "Semantic code graph for efficient codebase exploration. Provides symbol lookup, dependency analysis, impact assessment, and semantic search via the smt CLI.",
+  "url": "local://smt-cli",
+  "version": "1.0.0",
+  "provider": {
+    "organization": "save-my-tokens"
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "stateTransitionHistory": false
+  },
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "skills": [
+    {
+      "id": "smt-definition",
+      "name": "Symbol Definition",
+      "description": "What is this symbol? Returns signature, docstring, immediate callees. 1-hop lookup.",
+      "tags": ["code", "definition", "lookup"],
+      "examples": ["What is GraphBuilder?", "Define Neo4jClient"],
+      "invoke": "smt definition <symbol>"
+    },
+    {
+      "id": "smt-context",
+      "name": "Symbol Context",
+      "description": "What do I need to work on this? Returns symbol + N-hop callees + callers, cycles collapsed.",
+      "tags": ["code", "context", "dependencies"],
+      "examples": ["What context do I need for GraphBuilder?", "Show dependencies of CallAnalyzer"],
+      "invoke": "smt context <symbol> [--depth N] [--compress]"
+    },
+    {
+      "id": "smt-impact",
+      "name": "Change Impact Analysis",
+      "description": "What breaks if I change this? Returns all callers grouped by distance.",
+      "tags": ["code", "impact", "breaking-changes"],
+      "examples": ["What breaks if I change Neo4jClient?", "Impact of modifying CallAnalyzer"],
+      "invoke": "smt impact <symbol> [--depth N]"
+    },
+    {
+      "id": "smt-search",
+      "name": "Semantic Code Search",
+      "description": "Find symbols by meaning using local embeddings. No API calls.",
+      "tags": ["code", "search", "semantic"],
+      "examples": ["Find code related to cycle detection", "Search for authentication logic"],
+      "invoke": "smt search \"<query>\""
+    },
+    {
+      "id": "smt-status",
+      "name": "Graph Health Check",
+      "description": "Check graph freshness, node/edge counts, and git commit alignment. Always run at session start.",
+      "tags": ["maintenance", "health"],
+      "examples": ["Is the graph ready?", "Check graph status"],
+      "invoke": "smt status"
+    },
+    {
+      "id": "smt-callers",
+      "name": "Caller Lookup",
+      "description": "Shorthand for context with callers only. Who calls this symbol?",
+      "tags": ["code", "callers"],
+      "examples": ["Who calls validate_graph?"],
+      "invoke": "smt callers <symbol>"
+    },
+    {
+      "id": "smt-analysis",
+      "name": "Multi-Agent Analysis Harness",
+      "description": "Orchestrates Scout + Fabler + PathFinder subagents for deep codebase analysis: impact prediction, isolation finding, dependency mapping.",
+      "tags": ["analysis", "multi-agent", "impact", "isolation"],
+      "examples": ["What breaks if I refactor CallAnalyzer?", "What parts can be worked on independently?"],
+      "invoke": "/smt-analysis"
+    }
+  ],
+  "authentication": {
+    "schemes": []
+  }
+}
