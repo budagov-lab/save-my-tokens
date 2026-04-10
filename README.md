@@ -2,227 +2,152 @@
 
 **Intelligent code context for Claude — without reading entire files.**
 
-Instead of asking Claude to read 500-line files, SMT queries a **semantic dependency graph** of your codebase and returns only the **smallest relevant subgraph**. Result: **faster context**, **smaller payloads**, and **cycle-safe bounds**.
+SMT builds a **function-level dependency graph** of your codebase and answers specific questions with the smallest possible subgraph. Instead of reading 500-line files, Claude gets the 10 lines that matter.
 
 ---
 
 ## The Problem
 
-Claude reads **entire files** to understand one function:
-- "What does `GraphBuilder` do?" → reads 200 lines to answer
-- "Who calls `parse_diff`?" → reads all 40 functions in the file
-- "What breaks if I change `Neo4jClient`?" → reads deeply into the dependency tree
+When Claude needs to understand one function, it reads the whole file:
 
-**This is wasteful.** Most of those lines don't matter for the question.
+- "What does `GraphBuilder.build` do?" → reads 370 lines
+- "Who calls `parse_diff`?" → reads every function in the module
+- "What breaks if I rename `Neo4jClient`?" → unrolls the entire dependency tree
+
+Most of those tokens don't matter for the question.
 
 ---
 
 ## The Solution
 
-SMT builds a **graph of function-level dependencies** from your code, then answers specific questions with **minimal context**:
+Three commands, each answering one question:
 
 ```bash
-# What is this? (definition + signature)
-smt definition GraphBuilder
-
-# What do I need to work on this? (working context)
-smt context GraphBuilder --depth 2
-
-# What breaks if I change this? (impact analysis)
-smt impact Neo4jClient --depth 3
+smt definition GraphBuilder        # What is this?
+smt context GraphBuilder --depth 2 # What do I need to work on it?
+smt impact Neo4jClient --depth 3   # What breaks if I change it?
 ```
 
----
-
-## Key Features
-
-✅ **Three Query Modes** — Each answers one agent question (definition / context / impact)
-
-✅ **Cycle-Safe** — Detects circular dependencies (Tarjan's SCC algorithm), prevents unbounded context expansion
-
-✅ **Validated** — Shows git freshness status ("fresh" or "N commits behind")
-
-✅ **Compressed** — Removes trivial bridge functions with optional `--compress` flag
-
-✅ **Multi-Language** — Python + TypeScript (via Tree-sitter), extensible to more languages
+Each returns only the relevant subgraph — bounded by depth, with circular dependencies collapsed.
 
 ---
 
 ## Quick Start
 
-### Setup (Two Steps)
-
 ```bash
 git clone https://github.com/budagov-lab/save-my-tokens
 cd save-my-tokens
-
 python install.py
-# → Creates venv/, bootstraps pip, then runs full setup:
-#   • Checks Python 3.11+ and docker-compose
-#   • Installs all dependencies (isolated in venv)
-#   • Creates .env configuration
-#   • Starts Neo4j in Docker
-#   (Takes 5-10 minutes on first run — torch is ~2GB)
 ```
 
-### Build Your Code Graph
+`install.py` creates a venv, bootstraps pip, installs all dependencies, creates `.env`, and starts Neo4j via Docker. First run takes 5–10 minutes (PyTorch is ~2 GB).
+
+Requires Python 3.11+ from python.org (not Microsoft Store — missing `ensurepip`) and Docker.
 
 ```bash
-smt build
-```
+# Point SMT at your codebase and build the graph
+smt build --dir /path/to/your/project
 
-This parses your codebase (or sample fixtures) and builds the dependency graph.
-
-### First Query
-
-```bash
-# Check graph status
+# Verify it worked
 smt status
-
-# Query your code
-smt definition MyClass              # "What is this?"
-smt context MyClass --depth 2       # "What do I need to work on this?"
-smt impact MyFunction --depth 3     # "What breaks if I change this?"
 ```
 
 ---
 
-## Query Modes Explained
+## Query Modes
 
-### Mode 1: **Definition** — "What is this?"
+### `definition` — What is this?
 
-```bash
+Single-hop lookup: signature, docstring, immediate callees.
+
+```
 $ smt definition GraphBuilder
 
 GraphBuilder  [Class]
   file: src/graph/graph_builder.py:23
   sig:  class GraphBuilder:
-  doc:  Orchestrates the full pipeline: Parse -> Index -> Create Graph Nodes -> Create Graph Edges.
+  doc:  Orchestrates the full pipeline: Parse → Index → Graph Nodes → Graph Edges.
 
   calls (3):
-    _parse_all_files     (graph_builder.py)
-    _create_nodes        (graph_builder.py)
-    _create_edges        (graph_builder.py)
+    _parse_all_files     graph_builder.py
+    _create_nodes        graph_builder.py
+    _create_edges        graph_builder.py
 
   HEAD 1d27a7a  [✓] fresh
 ```
 
-**Use when:** Agent needs to understand what a symbol is
-**Scope:** 1 hop (immediate dependencies)
+### `context` — What do I need to work on this?
 
----
+Bounded bidirectional traversal: callees + callers up to `--depth` hops, with cycles collapsed.
 
-### Mode 2: **Context** — "What do I need to work on this?"
-
-```bash
+```
 $ smt context GraphBuilder --depth 2
 
 GraphBuilder  [Class]
-  file: src/graph/graph_builder.py:23
-  sig:  class GraphBuilder:
-  doc:  Orchestrates...
+  ...
 
-  calls (3):
-    _parse_all_files
-    _create_nodes
-    _create_edges
+  calls (3): _parse_all_files, _create_nodes, _create_edges
 
   [Cycle: CallAnalyzer._infer_edge_type → _resolve_target → _infer_edge_type]
     2 functions collapsed
 
   callers (1):
-    cmd_build  (smt_cli.py)
+    cmd_build  smt_cli.py
 
   context: nodes=7 edges=5 depth=2 cycles=1
-  HEAD 1d27a7a  [✓] fresh
 ```
 
-**Use when:** Agent refactoring, understanding dependencies, writing code
-**Scope:** 2-3 hops (bounded depth)
+Add `--compress` to strip trivial pass-through functions and cut output further:
 
----
+```
+$ smt context GraphBuilder --depth 2 --compress
+  context: nodes=7→4 edges=5→3  (3 bridge functions removed)
+```
 
-### Mode 3: **Impact** — "What breaks if I change this?"
+### `impact` — What breaks if I change this?
 
-```bash
+Reverse traversal: all callers grouped by distance from the root symbol.
+
+```
 $ smt impact Neo4jClient --depth 3
 
 Impact: Neo4jClient  [Class]
-  file: src/graph/neo4j_client.py:12
+  file: src/graph/neo4j_client.py:40
 
-  direct callers (5):
-    GraphBuilder      (graph_builder.py)
-    IncrementalUpdater (incremental/updater.py)
-    ... 
-
-  indirect callers — depth 2 (3):
-    cmd_build
-    cmd_diff
+  depth 1 — direct callers (5):
+    GraphBuilder          graph_builder.py
+    IncrementalUpdater    incremental/updater.py
+    SMTQueryEngine        agents/query_engine.py
     ...
 
-  [Cycle: get_bounded_subgraph → create_edges → get_bounded_subgraph]
-    2 functions in cycle
+  depth 2 — indirect callers (3):
+    cmd_build, cmd_diff, cmd_status
 
-  impact: nodes=12 depth=2 cycles=1
-  HEAD 1d27a7a  [✓] fresh
+  impact: total=8 depth=2 cycles=0
 ```
-
-**Use when:** Planning refactors, understanding breaking changes, impact analysis
-**Scope:** 3-4 hops (reverse traversal)
 
 ---
 
-## Advanced Usage
-
-### Compression (remove trivial functions)
+## Other Commands
 
 ```bash
-# Remove "bridge" functions (trivial forwarders with no logic)
-smt context GraphBuilder --depth 2 --compress
-
-context: nodes=7→4 edges=5→3 depth=2 cycles=1
-compressed: 3 bridge functions removed
-```
-
-### Semantic Search
-
-```bash
-# Find related symbols by meaning
+# Semantic search (local embeddings, no API calls)
 smt search "cycle detection"
-# → returns: detect_cycles, SCC, Tarjan's algorithm, etc.
-```
 
-### Sync After Commits
+# Sync graph after commits (incremental, ~10x faster than full rebuild)
+smt diff HEAD~1..HEAD
 
-```bash
-# Update graph after code changes
-smt diff HEAD~1..HEAD   # or: smt diff
-# Shows: "Graph synced: 3 commits, 12 symbols changed"
-```
+# Full rebuild
+smt build --clear
 
----
+# Graph health: node/edge counts, git freshness
+smt status
 
-## Architecture
+# Manage Neo4j
+smt docker up | down | status
 
-```
-Your Codebase (Python / TypeScript)
-          ↓
-    Tree-sitter
-    (parse symbols, calls, definitions)
-          ↓
-       Neo4j Graph
-    (store dependencies)
-          ↓
-   Three Query Engines
-   ├─ definition (1-hop)
-   ├─ context (bidirectional, bounded)
-   └─ impact (reverse traversal)
-          ↓
-    Cycle Detection (Tarjan's SCC)
-   + Validation (git freshness)
-   + Compression (bridge removal)
-          ↓
-     CLI Tool / Agent
+# Configure a project (writes .claude/settings.json with hooks)
+smt setup [--dir PATH]
 ```
 
 ---
@@ -230,289 +155,116 @@ Your Codebase (Python / TypeScript)
 ## CLI Reference
 
 ```
-smt build [--dir PATH]        Build graph from src/
-smt build --check             Show graph statistics
-smt build --clear             Wipe and rebuild
+smt build [--dir PATH]         Build or sync graph
+smt build --check              Show graph statistics
+smt build --clear              Wipe and rebuild
 
-smt definition SYMBOL         Fast lookup: what is this?
-smt context SYMBOL [--depth] Working context with cycles
-smt impact SYMBOL [--depth]   Who calls this symbol (reverse)
-smt context ... --compress    Remove bridge functions
+smt definition SYMBOL          1-hop lookup
+smt context SYMBOL [--depth N] [--compress]   Bidirectional context
+smt impact SYMBOL [--depth N]  Reverse traversal
+smt callers SYMBOL             Shorthand for context (callers only)
+smt search QUERY               Semantic search by meaning
 
-smt search QUERY              Semantic search by meaning
-smt callers SYMBOL            Quick alias for context --callers
-
-smt diff [RANGE]              Sync graph after commits
+smt diff [RANGE]               Incremental sync (default: HEAD~1..HEAD)
 smt status                     Graph health check
 
-smt docker up|down|status     Manage Neo4j container
-smt setup [--dir PATH]        Configure a project
-smt hooks install|uninstall   Auto-sync hooks for git
+smt docker up|down|status      Manage Neo4j container
+smt setup [--dir PATH]         Configure project hooks
 ```
 
 ---
 
-## Requirements
+## Agent Integration
 
-- **Python 3.11+**
-- **Docker** (for Neo4j, or use existing Neo4j instance)
-- **Git** (for change tracking)
+### CLI (subprocess)
 
----
+Works from any language or agent framework:
 
-## How Agents Use SMT
-
-### CLI Approach (subprocess)
-
-Agents can invoke `smt` CLI commands directly via subprocess:
-
-```python
-# Example 1: Understanding a function
-result = subprocess.run(["smt", "definition", "validate_graph"])
-# Returns: signature, docstring, 1-hop callees
-
-# Example 2: Impact analysis
-result = subprocess.run(["smt", "impact", "GraphBuilder.__init__", "--depth", "3"])
-# Returns: all callers grouped by distance
-
-# Example 3: Commit analysis
-result = subprocess.run(["smt", "diff", "HEAD~1..HEAD"])
-# Shows: which symbols changed, who depends on them
+```bash
+smt definition validate_graph
+smt impact GraphBuilder.__init__ --depth 3
+smt context Neo4jClient --depth 2 --compress
 ```
 
-**Pros**: Simple, works from any language, no imports needed.
+### Python API (`SMTQueryEngine`)
 
-**Cons**: 
-- Subprocess overhead per call
-- Parsing stdout is fragile
-- No structured return types (string parsing)
-- Sequencing multiple queries requires parsing between steps
-
----
-
-### A2A Approach: Agent-to-Agent Orchestration (recommended)
-
-For multi-step analysis workflows, use **A2A orchestration** — one orchestrator agent spawns and manages specialized subagents (Scout, Fabler, PathFinder) with deterministic, structured data flow.
-
-**Problem A2A Solves**:
-1. **Query sequencing**: Agent needs facts before it can reason (Scout → Fabler)
-   - Without A2A: Agent does N subprocess calls, waits for each, parses output, then decides next step
-   - With A2A: Orchestrator sends Scout once, gets structured JSON, routes directly to Fabler with those facts
-2. **Determinism**: Agent chains hallucinate code paths
-   - Without A2A: Fabler might reason about "a function that doesn't exist" based on bad Scout output parsing
-   - With A2A: SMTQueryEngine guarantees Scout returns only symbols that exist in the graph
-3. **Parallelism**: Some analyses can run at the same time
-   - Without A2A: Sequential subprocess calls block each other
-   - With A2A: Scout completes once, then Fabler and PathFinder run in parallel with identical facts
-
-**Solution: SMTQueryEngine**
+For structured agent workflows without subprocess overhead:
 
 ```python
 from src.agents.query_engine import SMTQueryEngine
 
 engine = SMTQueryEngine()
 
-# Scout agent gathers facts (deterministic, structured)
-definition = engine.definition("GraphBuilder")           # What is this?
-context = engine.context("GraphBuilder", depth=2)       # Working context
-impact = engine.impact("GraphBuilder", depth=3)         # Who calls this?
-search = engine.search("cycle detection", top_k=5)      # Semantic search
+result = engine.definition("GraphBuilder")
+# → {"found": True, "name": "GraphBuilder", "file": "...", "line": 23, "callees": [...]}
 
-# Results are JSON-serializable dicts, not stdout strings
-# Fabler/PathFinder agents receive these as structured input
-# No parsing, no hallucination risk
+result = engine.context("GraphBuilder", depth=2, compress=True)
+# → {"found": True, "nodes": [...], "edges": [...], "cycles": [...], "bridges_removed": 3}
+
+result = engine.impact("Neo4jClient", depth=3)
+# → {"found": True, "callers_by_depth": {1: [...], 2: [...]}, "total_callers": 8}
+
+results = engine.search("cycle detection", top_k=5)
+# → [{"name": "...", "file": "...", "score": 0.95}, ...]
 
 engine.close()
 ```
 
-**Why A2A Over CLI**:
-| Aspect | CLI (subprocess) | A2A (SMTQueryEngine) |
-|---|---|---|
-| **Return type** | stdout string (parse) | JSON dict (structured) |
-| **Overhead** | Per-call subprocess | In-process queries |
-| **Agent chains** | Sequential only | Sequential + parallel |
-| **Hallucination risk** | High (parsing) | Low (verified symbols) |
-| **Use case** | Simple one-off queries | Complex multi-agent workflows |
+All methods return JSON-serializable dicts with no stdout side effects.
 
----
+### Agent Harness (Scout / Fabler / PathFinder)
 
-## FAQ
+SMT ships a team of specialized subagents for multi-step analysis in Claude Code:
 
-**Q: Do I need Neo4j?**
-A: Yes. You can run it locally (`smt docker up`) or point to an existing instance. Community Edition is free.
+| Agent | Question it answers |
+|---|---|
+| **Scout** | "What is X? Who calls it? Is the graph fresh?" |
+| **Fabler** | "What breaks if I change X? In what order do I make the changes?" |
+| **PathFinder** | "Which parts of this module can I refactor independently?" |
 
-**Q: What languages are supported?**
-A: Python and TypeScript (via Tree-sitter). More languages can be added.
+Invoke via Claude Code:
 
-**Q: How often should I rebuild?**
-A: `smt diff` syncs incrementally after commits. Use `smt build` for full rebuilds. Set up git hooks for auto-sync.
-
-**Q: Can I use it with Claude?**
-A: Yes! Agents can invoke `smt` via Bash:
-```bash
-$ smt context GraphBuilder --depth 2
 ```
-
-**Q: What about private codebases?**
-A: Everything runs locally. Neo4j stays on your machine.
-
-**Q: Can it handle very large codebases (100k+ LOC)?**
-A: SMT is designed for large graphs. Neo4j Community can handle millions of nodes. Queries scale with depth bounds, not codebase size.
-
----
-
-## Agent Harness: Automated Code Analysis
-
-SMT includes **Scout, Fabler, and PathFinder** — a team of specialized agents that automate multi-step code analysis workflows.
-
-### Scout: Read-Only Graph Analyst
-
-**Use when**: You need facts about code structure and dependencies
-
-```bash
 /smt-analysis
-# Scout runs: smt status → smt definition → smt context → smt impact
-# Returns: Exact file:line locations, caller counts, cycle detection
 ```
 
-**Example**:
-```
-Question: "Who calls GraphBuilder.build?"
-Scout queries: smt context GraphBuilder.build --depth 3
-Returns: 7 direct callers, 12 indirect, no cycles, graph is fresh
-```
-
-### Fabler: What-If Impact Analyst
-
-**Use when**: You want to predict consequences of a code change
-
-```bash
-# Ask naturally:
-# "What would break if I renamed GraphBuilder.build to GraphBuilder.execute?"
-# "Impact analysis: refactor Neo4jClient.__init__"
-```
-
-**What Fabler does**:
-1. Receives Scout's verified facts
-2. Classifies each caller: **Breaking** / **Degraded** / **Unaffected**
-3. Proposes safe change order (leaf functions first)
-4. Assesses if change can be atomic (one commit)
-
-**Example output**:
-```
-Proposed change: Rename GraphBuilder.build() → GraphBuilder.execute()
-Confidence: HIGH
-
-Direct callers affected: 1
-- cmd_build (src/smt_cli.py:168): BREAKING
-
-Safe change order:
-  Step 1: Rename in src/graph/graph_builder.py
-  Step 2: Update caller in src/smt_cli.py
-  Step 3: Update tests/
-
-Atomicity: One commit ✓
-```
-
-### PathFinder: Code Isolation Analyst
-
-**Use when**: You need to find independent code areas for parallel development
-
-```bash
-# Ask naturally:
-# "What parts of src/parsers can we work on independently?"
-# "Find isolated components in the graph module"
-```
-
-**What PathFinder does**:
-1. Enumerates all symbols in target area
-2. Checks for external dependencies per component
-3. Identifies connected components (tightly coupled groups)
-4. Outputs safe parallel work groupings
-
-**Example output**:
-```
-Independent components found: 2
-
-Component 1: PythonParser, _extract_function_node
-  - External callers: GraphBuilder.build (read-only)
-  - Status: Fully isolated
-
-Component 2: TypeScriptParser, _extract_ts_function
-  - External callers: GraphBuilder.build (read-only)
-  - Status: Fully isolated
-
-Safe to work on in parallel:
-  Team A: Refactor PythonParser
-  Team B: Refactor TypeScriptParser
-  (No coordination needed)
-```
-
-### How to Use the Agent Harness
-
-```bash
-# In Claude Code, invoke directly:
-/smt-analysis
-
-# Or ask questions that trigger it:
-"What breaks if I change Neo4jClient?"
-"Can we work on src/parsers independently?"
-"Show me the impact analysis for validate_graph"
-```
-
-### Under the Hood: A2A Orchestration
-
-The Agent Harness implements **A2A (Agent-to-Agent) orchestration** internally:
-
-```
-User Question
-     ↓
-Orchestrator (Claude Code)
-     ├→ Spawns Scout via SMTQueryEngine
-     │   (reads graph, gathers verified facts)
-     │
-     ├→ Routes to Fabler and/or PathFinder (parallel)
-     │   (each receives Scout's JSON output)
-     │
-     └→ Synthesizes final answer
-        (file:line locations + action plan)
-```
-
-**Why this matters**:
-- **Facts first**: Scout verifies symbols exist before Fabler reasons about them
-- **Parallel**: Fabler and PathFinder analyze independently (no waiting)
-- **No parsing**: All data is structured JSON (no stdout string parsing)
-- **Deterministic**: No hallucination risk from string parsing or symbol inference
-
-See [How Agents Use SMT: A2A Approach](#a2a-approach-agent-to-agent-orchestration-recommended) for implementation details and SMTQueryEngine API.
+Or ask naturally — "what breaks if I change X?" triggers Scout → Fabler automatically.
 
 ---
 
-## Contributing
+## Architecture
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and testing.
+```
+Source Code (Python / TypeScript)
+        ↓  Tree-sitter parsing
+   SymbolIndex  (functions, classes, imports)
+        ↓  CallAnalyzer
+   Neo4j Graph  (nodes + CALLS / DEFINES / IMPORTS / INHERITS edges)
+        ↓
+  ┌─────────────────────────────────┐
+  │  definition  context  impact    │  ← three query modes
+  │  CycleDetector (Tarjan's SCC)   │  ← prevents unbounded expansion
+  │  Compressor (bridge removal)    │  ← reduces output size
+  │  Validator (git freshness)      │  ← warns when graph is stale
+  └─────────────────────────────────┘
+        ↓
+   CLI / SMTQueryEngine / Agents
+```
+
+**Embeddings**: Local `all-MiniLM-L6-v2` (384-dim, via SentenceTransformers) stored in `.smt/embeddings/`. No API calls, fully offline.
+
+**Project isolation**: All graph nodes carry a `project_id` (SHA256 of project root path) so multiple projects share one Neo4j instance without colliding.
+
+---
+
+## Requirements
+
+- Python 3.11+ (from python.org, not Microsoft Store)
+- Docker (for Neo4j, or point to an existing instance)
+- Git
 
 ---
 
 ## License
 
 MIT
-
----
-
-## Documentation
-
-- **[CLAUDE.md](CLAUDE.md)** — Project guidance, architecture, development workflows
-
----
-
-## Links
-
-- **GitHub:** https://github.com/budagov-lab/save-my-tokens
-- **Issues:** https://github.com/budagov-lab/save-my-tokens/issues
-
----
-
-## Made with ❤️ for Claude
-
-Built to help Claude (and other agents) understand code faster with less context.
