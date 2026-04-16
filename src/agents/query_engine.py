@@ -1,7 +1,8 @@
 """SMTQueryEngine: Structured query API for agents (no stdout, returns typed models)."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -417,6 +418,85 @@ class SMTQueryEngine:
                 "freshness_status": "unknown",
                 "error": str(e),
             })
+
+    def batch(
+        self,
+        queries: List[Tuple[str, tuple, dict]],
+        max_workers: int = 8,
+    ) -> List[Any]:
+        """Run multiple queries concurrently using a thread pool.
+
+        Each thread opens its own Neo4j session from the shared driver pool
+        (default pool size: 100), so queries execute in parallel without
+        connection contention.
+
+        Args:
+            queries: List of (method_name, args, kwargs) tuples.
+                     method_name must be one of: definition, context, impact,
+                     search, status.
+                     Example:
+                         [
+                             ("impact",     ("build",),          {"depth": 3}),
+                             ("impact",     ("validate_graph",), {"depth": 3}),
+                             ("context",    ("GraphBuilder",),   {"depth": 2}),
+                             ("definition", ("add",),            {}),
+                         ]
+            max_workers: Max parallel threads (default: 8).
+                         Safe up to Neo4j pool size (100).
+
+        Returns:
+            List of results in the same order as input queries.
+            Each result is the typed model returned by the called method.
+            If a query raises unexpectedly (beyond the method's own error
+            handling), the result at that index is the Exception object.
+
+        Example::
+
+            engine = SMTQueryEngine()
+            results = engine.batch([
+                ("impact",  ("build",),       {"depth": 3}),
+                ("impact",  ("GraphBuilder",), {"depth": 3}),
+                ("context", ("add",),          {"depth": 2, "compress": True}),
+            ])
+            for query, result in zip(queries, results):
+                if isinstance(result, Exception):
+                    print(f"{query[1][0]}: ERROR {result}")
+                elif result.found:
+                    print(f"{query[1][0]}: OK")
+        """
+        _methods = {
+            "definition": self.definition,
+            "context":    self.context,
+            "impact":     self.impact,
+            "search":     self.search,
+            "status":     self.status,
+        }
+
+        # Validate method names up front — fail fast before spawning threads
+        for i, (method_name, args, kwargs) in enumerate(queries):
+            if method_name not in _methods:
+                raise ValueError(
+                    f"queries[{i}]: unknown method '{method_name}'. "
+                    f"Valid: {', '.join(_methods)}"
+                )
+
+        results: List[Any] = [None] * len(queries)
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(queries))) as pool:
+            futures = {
+                pool.submit(_methods[method_name], *args, **kwargs): idx
+                for idx, (method_name, args, kwargs) in enumerate(queries)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:
+                    logger.error(f"batch query[{idx}] raised unexpectedly: {exc}")
+                    results[idx] = exc
+
+        logger.debug(f"batch: {len(queries)} queries completed ({max_workers} workers)")
+        return results
 
     def close(self) -> None:
         """Close database connection."""
