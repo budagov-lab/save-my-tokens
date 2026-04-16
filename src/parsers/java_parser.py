@@ -3,8 +3,6 @@
 from pathlib import Path
 from typing import List, Optional
 
-from loguru import logger
-
 from src.parsers.base_parser import BaseParser
 from src.parsers.symbol import Symbol
 

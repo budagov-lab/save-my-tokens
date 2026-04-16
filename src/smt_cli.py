@@ -325,6 +325,9 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
     if not _require_git(target_path):
         return 1
 
+    # Ensure .smtignore exists (created on first build, like .gitignore)
+    _ensure_smtignore(target_path)
+
     # Find source directory — try common names, fall back to project root
     _CANDIDATE_SRC_DIRS = ['src', 'app', 'lib', 'pkg', 'core', 'source']
     src_dir = None
@@ -368,6 +371,30 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: str | None =
 # context
 # ---------------------------------------------------------------------------
 
+_SMTIGNORE_TEMPLATE = """\
+# .smtignore — files and directories excluded from smt build and smt watch
+# Syntax:
+#   simple name  →  matches any path component  (e.g. vendor)
+#   path/pattern →  matched against relative path from project root
+#   *.glob       →  fnmatch glob against filename
+#
+# Default skip dirs are always applied (node_modules, .venv, __pycache__, …)
+# Add project-specific overrides below:
+
+# tests/fixtures
+# vendor
+# *.generated.py
+"""
+
+
+def _ensure_smtignore(project_root: Path) -> None:
+    """Create a .smtignore in project_root if one doesn't exist yet."""
+    smtignore = project_root / '.smtignore'
+    if not smtignore.exists():
+        smtignore.write_text(_SMTIGNORE_TEMPLATE, encoding='utf-8')
+        print(f"  .smtignore created in {project_root}")
+
+
 def _resolve_project_path() -> Path:
     """Resolve project path from .smt_config or cwd."""
     cwd = Path.cwd()
@@ -380,6 +407,24 @@ def _resolve_project_path() -> Path:
         except (json.JSONDecodeError, KeyError, FileNotFoundError):
             pass
     return cwd
+
+
+def _get_default_depth(fallback: int) -> int:
+    """Return the configured default query depth, falling back to the hardcoded default.
+
+    Reads ``default_depth`` from .claude/.smt_config (set by ``smt setup`` or edited manually).
+    Per-invocation ``--depth N`` always takes precedence — this only fills in the default.
+    """
+    try:
+        cfg_file = Path.cwd() / '.claude' / '.smt_config'
+        if cfg_file.exists():
+            with open(cfg_file, 'r', encoding='utf-8') as f:
+                val = json.load(f).get('default_depth')
+            if isinstance(val, int) and 1 <= val <= 10:
+                return val
+    except Exception:
+        pass
+    return fallback
 
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
@@ -1011,10 +1056,15 @@ def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
     import threading
     import time
 
-    _SOURCE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+    _SOURCE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java"}
     _pending: set = set()
     _timer: Optional[threading.Timer] = None
     _lock = threading.Lock()
+
+    from src.graph.graph_builder import GraphBuilder as _GB
+    from src.smtignore import SMTIgnore as _SMTIgnore
+    _SKIP_DIRS = _GB._SKIP_DIRS
+    _smtignore = _SMTIgnore(target_path)
 
     def _flush() -> None:
         with _lock:
@@ -1060,7 +1110,14 @@ def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
             if event.is_directory:
                 return
             src = getattr(event, 'src_path', None)
-            if not src or Path(src).suffix not in _SOURCE_EXTS:
+            if not src:
+                return
+            p = Path(src)
+            if p.suffix not in _SOURCE_EXTS:
+                return
+            if any(part in _SKIP_DIRS for part in p.parts):
+                return
+            if _smtignore.is_ignored(p):
                 return
             with _lock:
                 _pending.add(src)
@@ -1443,10 +1500,17 @@ def cmd_setup(target_dir: Path) -> int:
         'project_dir': str(target_dir),
         'project_name': target_dir.name,
         'project_id': _get_project_id(target_dir),
+        'default_depth': 2,
     }
     with open(smt_config_file, 'w', encoding='utf-8') as f:
         json.dump(smt_config, f, indent=2)
     print("  .claude/.smt_config    [OK]")
+
+    # ------------------------------------------------------------------
+    # 0a. .smtignore — project-level exclusion rules (like .gitignore for SMT)
+    # ------------------------------------------------------------------
+    _ensure_smtignore(target_dir)
+    print("  .smtignore             [OK]")
 
     # ------------------------------------------------------------------
     # 0b. .gitignore — ensure .smt/ (embeddings cache) is ignored
@@ -2763,7 +2827,7 @@ advanced analysis:
     # context
     p_ctx = sub.add_parser('context', help='Symbol context (bidirectional, bounded)')
     p_ctx.add_argument('symbol')
-    p_ctx.add_argument('--depth', type=int, default=1)
+    p_ctx.add_argument('--depth', type=int, default=None, help='Traversal depth (default: 2, or default_depth in .smt_config)')
     p_ctx.add_argument('--callers', action='store_true')
     p_ctx.add_argument('--file', default=None, help='Filter by file path (substring match)')
     p_ctx.add_argument('--compress', action='store_true', help='Remove bridge functions to reduce tokens')
@@ -2778,7 +2842,7 @@ advanced analysis:
     # impact
     p_impact = sub.add_parser('impact', help='Impact analysis: what breaks if I change this?')
     p_impact.add_argument('symbol')
-    p_impact.add_argument('--depth', type=int, default=3, help='Maximum depth for impact traversal')
+    p_impact.add_argument('--depth', type=int, default=None, help='Maximum depth for impact traversal (default: 3, or default_depth in .smt_config)')
     p_impact.add_argument('--compress', action='store_true', help='Remove bridge functions to reduce tokens')
     p_impact.add_argument('--json', action='store_true', help='Output as JSON')
 
@@ -2884,12 +2948,13 @@ advanced analysis:
     if args.command == 'build':
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
     elif args.command == 'context':
+        depth = args.depth if args.depth is not None else _get_default_depth(2)
         if getattr(args, 'json', False):
             engine = _get_engine()
-            result = engine.context(args.symbol, depth=args.depth, compress=args.compress)
+            result = engine.context(args.symbol, depth=depth, compress=args.compress)
             print(json.dumps(result, indent=2))
             return 0 if result.get('found') else 1
-        return cmd_context(args.symbol, depth=args.depth, callers=args.callers,
+        return cmd_context(args.symbol, depth=depth, callers=args.callers,
                           file_filter=args.file, compress=args.compress)
     elif args.command == 'definition':
         if getattr(args, 'json', False):
@@ -2899,12 +2964,13 @@ advanced analysis:
             return 0 if result.get('found') else 1
         return cmd_definition(args.symbol, file_filter=args.file)
     elif args.command == 'impact':
+        depth = args.depth if args.depth is not None else _get_default_depth(3)
         if getattr(args, 'json', False):
             engine = _get_engine()
-            result = engine.impact(args.symbol, depth=args.depth)
+            result = engine.impact(args.symbol, depth=depth)
             print(json.dumps(result, indent=2))
             return 0 if result.get('found') else 1
-        return cmd_impact(args.symbol, max_depth=args.depth, compress=args.compress)
+        return cmd_impact(args.symbol, max_depth=depth, compress=args.compress)
     elif args.command == 'search':
         if getattr(args, 'json', False):
             engine = _get_engine()

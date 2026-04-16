@@ -13,6 +13,7 @@ from src.parsers.import_resolver import ImportResolver
 from src.parsers.python_parser import PythonParser
 from src.parsers.symbol import Symbol
 from src.parsers.symbol_index import SymbolIndex
+from src.smtignore import SMTIgnore
 
 try:
     from src.parsers.typescript_parser import TypeScriptParser
@@ -59,6 +60,9 @@ class GraphBuilder:
         self.call_analyzer = CallAnalyzer(self.symbol_index)
         self.nodes: List[Node] = []
         self.edges: List[Tuple[Edge, str, str]] = []
+        self.smtignore = SMTIgnore(self.base_path)
+        if self.smtignore:
+            logger.info(f"Loaded .smtignore from {self.base_path}")
         logger.info(f"Initialized GraphBuilder for {base_path}")
 
     def build(self, build_embeddings: bool = True) -> None:
@@ -101,35 +105,39 @@ class GraphBuilder:
     def _should_skip(cls, file_path: Path) -> bool:
         return any(part in cls._SKIP_DIRS for part in file_path.parts)
 
+    def _is_ignored(self, file_path: Path) -> bool:
+        """Check both _SKIP_DIRS and .smtignore rules."""
+        return self._should_skip(file_path) or self.smtignore.is_ignored(file_path)
+
     def _parse_all_files(self) -> None:
         """Parse all supported source files (Python, TypeScript, Go, Rust, Java) in base_path."""
         # Collect all files first
         all_files = []
         python_files = list(self.base_path.rglob("*.py"))
         for file_path in python_files:
-            if not self._should_skip(file_path):
+            if not self._is_ignored(file_path):
                 all_files.append((file_path, "python"))
 
         if self.typescript_parser:
             ts_files = list(self.base_path.rglob("*.ts")) + list(self.base_path.rglob("*.tsx"))
             js_files = list(self.base_path.rglob("*.js")) + list(self.base_path.rglob("*.jsx"))
             for file_path in ts_files + js_files:
-                if not self._should_skip(file_path):
+                if not self._is_ignored(file_path):
                     all_files.append((file_path, "typescript"))
 
         if self.go_parser:
             for file_path in self.base_path.rglob("*.go"):
-                if not self._should_skip(file_path):
+                if not self._is_ignored(file_path):
                     all_files.append((file_path, "go"))
 
         if self.rust_parser:
             for file_path in self.base_path.rglob("*.rs"):
-                if not self._should_skip(file_path):
+                if not self._is_ignored(file_path):
                     all_files.append((file_path, "rust"))
 
         if self.java_parser:
             for file_path in self.base_path.rglob("*.java"):
-                if not self._should_skip(file_path):
+                if not self._is_ignored(file_path):
                     all_files.append((file_path, "java"))
 
         # Parse with progress bar

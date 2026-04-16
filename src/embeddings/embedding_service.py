@@ -74,7 +74,7 @@ class EmbeddingService:
                 error_msg = str(e)
                 logger.error(f"Failed to load embedding model {settings.EMBEDDING_MODEL}: {e}")
                 # Surface error to CLI user (not just logger)
-                if "torchvision" in error_msg.lower() or "operator torchvision" in error_msg.lower():
+                if "torchvision" in error_msg.lower():
                     fix_msg = "pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cpu"
                 else:
                     fix_msg = "pip install torch --index-url https://download.pytorch.org/whl/cpu"

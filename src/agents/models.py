@@ -26,6 +26,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ErrorReason = Literal["not_found", "graph_stale", "neo4j_offline", "parse_error"]
 
 
+def _infer_error_reason(data: Any) -> Any:
+    """Shared pre-validator: maps raw engine 'error' key to error_reason."""
+    if not isinstance(data, dict):
+        return data
+    if data.get("error") and not data.get("error_reason"):
+        msg = str(data["error"])
+        if "ServiceUnavailable" in msg or "Unable to connect" in msg or "Connection refused" in msg:
+            data = {**data, "error_reason": "neo4j_offline"}
+        elif "not found" in msg.lower():
+            data = {**data, "error_reason": "not_found"}
+        else:
+            data = {**data, "error_reason": "parse_error"}
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Shared primitives
 # ---------------------------------------------------------------------------
@@ -114,18 +129,7 @@ class DefinitionResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce_error(cls, data: Any) -> Any:
-        """Map raw engine 'error' key to error_message and infer error_reason."""
-        if not isinstance(data, dict):
-            return data
-        if data.get("error") and not data.get("error_reason"):
-            msg = str(data["error"])
-            if "ServiceUnavailable" in msg or "Unable to connect" in msg or "Connection refused" in msg:
-                data = {**data, "error_reason": "neo4j_offline"}
-            elif "not found" in msg.lower():
-                data = {**data, "error_reason": "not_found"}
-            else:
-                data = {**data, "error_reason": "parse_error"}
-        return data
+        return _infer_error_reason(data)
 
     @property
     def ref(self) -> Optional[SymbolRef]:
@@ -178,29 +182,7 @@ class ContextResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce_error(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        if data.get("error") and not data.get("error_reason"):
-            msg = str(data["error"])
-            if "ServiceUnavailable" in msg or "Unable to connect" in msg or "Connection refused" in msg:
-                data = {**data, "error_reason": "neo4j_offline"}
-            elif "not found" in msg.lower():
-                data = {**data, "error_reason": "not_found"}
-            else:
-                data = {**data, "error_reason": "parse_error"}
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_edges(cls, data: Any) -> Any:
-        """edges from engine are plain dicts — ensure they pass EdgeRef validation."""
-        if not isinstance(data, dict):
-            return data
-        edges = data.get("edges")
-        if edges and isinstance(edges, list) and isinstance(edges[0], dict):
-            # already dicts, Pydantic will coerce to EdgeRef
-            pass
-        return data
+        return _infer_error_reason(data)
 
     @property
     def symbol_refs(self) -> List[SymbolRef]:
@@ -247,17 +229,7 @@ class ImpactResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce_error(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        if data.get("error") and not data.get("error_reason"):
-            msg = str(data["error"])
-            if "ServiceUnavailable" in msg or "Unable to connect" in msg or "Connection refused" in msg:
-                data = {**data, "error_reason": "neo4j_offline"}
-            elif "not found" in msg.lower():
-                data = {**data, "error_reason": "not_found"}
-            else:
-                data = {**data, "error_reason": "parse_error"}
-        return data
+        return _infer_error_reason(data)
 
     @model_validator(mode="before")
     @classmethod

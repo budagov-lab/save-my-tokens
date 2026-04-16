@@ -116,7 +116,7 @@ class CallAnalyzer:
             if func_node:
                 func_name = source_code[
                     func_node.start_byte : func_node.end_byte
-                ].decode("utf-8")
+                ].decode("utf-8", errors="replace")
                 resolved = self._resolve_call_name(func_name, file_path)
                 if resolved:
                     calls.add(resolved)

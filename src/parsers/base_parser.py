@@ -93,7 +93,7 @@ class BaseParser(ABC):
         source_code: bytes,
         file_path: str,
         parent: Optional[str] = None,
-    ) -> Symbol:
+    ) -> Optional[Symbol]:
         """Create a Symbol from a tree-sitter node.
 
         Args:
@@ -104,14 +104,14 @@ class BaseParser(ABC):
             parent: Parent symbol name (e.g., class name for methods)
 
         Returns:
-            Symbol object
+            Symbol object, or None if the node has no name field.
         """
         name = self._get_child_text(node, "name", source_code)
         if name is None:
             logger.warning(
                 f"No 'name' field on {node.type} node at {file_path}:{node.start_point[0] + 1} — skipping"
             )
-            return None  # type: ignore[return-value]
+            return None
         docstring = self._get_docstring(node, source_code)
 
         return Symbol(

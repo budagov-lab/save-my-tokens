@@ -3,8 +3,6 @@
 from pathlib import Path
 from typing import List, Optional
 
-from loguru import logger
-
 from src.parsers.base_parser import BaseParser
 from src.parsers.symbol import Symbol
 
@@ -60,7 +58,7 @@ class GoParser(BaseParser):
         for child in node.children:
             if child.type == "comment":
                 text = source_code[child.start_byte:child.end_byte].decode("utf-8", errors="replace")
-                last_doc = text.lstrip("/ ").strip()
+                last_doc = text.removeprefix("//").removeprefix(" ").strip()
 
             elif child.type == "function_declaration":
                 sym = self._make_symbol(child, "function", source_code, file_path, parent)

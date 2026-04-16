@@ -318,12 +318,12 @@ class Neo4jClient:
             query1 = f"""
             MATCH (start {pid_filter})
             OPTIONAL MATCH path = (start)-[:CALLS*1..{max_depth}]->(reached)
-            WITH start, collect(DISTINCT reached) AS reachable
-            WITH [start] + reachable AS all_nodes
+            WITH start.node_id AS root_id, collect(DISTINCT reached) AS reachable, start
+            WITH root_id, [start] + reachable AS all_nodes
             UNWIND all_nodes AS n
             RETURN DISTINCT n.node_id AS node_id, n.name AS name,
                    n.file AS file, n.line AS line, labels(n) AS labels,
-                   (n.node_id = start.node_id) AS is_root
+                   (n.node_id = root_id) AS is_root
             ORDER BY n.name
             """
             result1 = session.run(query1, **params)
@@ -405,12 +405,12 @@ class Neo4jClient:
             query1 = f"""
             MATCH (start {pid_filter})
             OPTIONAL MATCH path = (caller)-[:CALLS*1..{max_depth}]->(start)
-            WITH start, collect(DISTINCT caller) AS callers
-            WITH [start] + callers AS all_nodes
+            WITH start.node_id AS root_id, collect(DISTINCT caller) AS callers, start
+            WITH root_id, [start] + callers AS all_nodes
             UNWIND all_nodes AS n
             RETURN DISTINCT n.node_id AS node_id, n.name AS name,
                    n.file AS file, n.line AS line, labels(n) AS labels,
-                   (n.node_id = start.node_id) AS is_root
+                   (n.node_id = root_id) AS is_root
             ORDER BY n.name
             """
             result1 = session.run(query1, **params)

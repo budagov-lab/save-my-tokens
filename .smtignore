@@ -1,0 +1,12 @@
+# .smtignore — files and directories excluded from smt build and smt watch
+# Syntax:
+#   simple name  →  matches any path component  (e.g. vendor)
+#   path/pattern →  matched against relative path from project root
+#   *.glob       →  fnmatch glob against filename
+#
+# Default skip dirs are always applied (node_modules, .venv, __pycache__, …)
+# Add project-specific overrides below:
+
+# tests/fixtures
+# vendor
+# *.generated.py
