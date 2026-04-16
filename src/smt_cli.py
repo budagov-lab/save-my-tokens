@@ -2772,6 +2772,127 @@ def cmd_layer(config_path: str | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# breaking-changes
+# ---------------------------------------------------------------------------
+
+def cmd_breaking_changes(
+    symbol: str,
+    before_ref: str = "HEAD~1",
+    after_ref: str = "HEAD",
+) -> int:
+    """Compare a function's contract between two git refs and report breaking changes.
+
+    Reads the symbol's source at both refs using `git show`, extracts contracts
+    via AST analysis, and classifies parameter/return-type/exception changes.
+    """
+    from src.contracts.extractor import ContractExtractor
+    from src.contracts.breaking_change_detector import BreakingChangeDetector
+    from src.parsers.symbol import Symbol as SymbolObj
+
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    # Look up symbol's file from the graph
+    try:
+        client = _get_neo4j_client(_get_project_id(project_path))
+        pid = client.project_id
+        params: dict = {"name": symbol}
+        pid_filter = "AND n.project_id = $pid" if pid else ""
+        if pid:
+            params["pid"] = pid
+
+        with client.driver.session() as session:
+            row = session.run(
+                f"MATCH (n {{name: $name}}) WHERE n:Function {pid_filter} "
+                "RETURN n.file AS file, n.line AS line LIMIT 1",
+                **params,
+            ).single()
+    except Exception as e:
+        print(f"ERROR: Graph query failed: {e}")
+        return 1
+
+    if not row:
+        print(f"Symbol '{symbol}' not found in graph (Functions only).")
+        print(f"Hint: run `smt build` or `smt sync` to refresh the graph.")
+        return 1
+
+    file_path: str = row["file"]
+    line: int = row["line"] or 1
+
+    # Compute repo-relative path with forward slashes (git requires them)
+    try:
+        rel_path = str(Path(file_path).relative_to(project_path)).replace("\\", "/")
+    except ValueError:
+        rel_path = file_path.replace("\\", "/")
+
+    def _git_show(ref: str, path: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(project_path), "show", f"{ref}:{path}"],
+            capture_output=True, text=True, encoding="utf-8",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"`git show {ref}:{path}` failed: {result.stderr.strip()}")
+        return result.stdout
+
+    try:
+        before_src = _git_show(before_ref, rel_path)
+        after_src = _git_show(after_ref, rel_path)
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        return 1
+
+    sym_before = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0)
+    sym_after  = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0)
+
+    before_contract = ContractExtractor(before_src).extract_function_contract(sym_before)
+    after_contract  = ContractExtractor(after_src).extract_function_contract(sym_after)
+
+    if not before_contract:
+        print(f"Could not extract contract for '{symbol}' at {before_ref}.")
+        print(f"  (function may not be top-level, or file may not be Python)")
+        return 1
+    if not after_contract:
+        print(f"Could not extract contract for '{symbol}' at {after_ref}.")
+        print(f"  (function may not be top-level, or file may not be Python)")
+        return 1
+
+    comparison = BreakingChangeDetector().detect_breaking_changes(before_contract, after_contract)
+
+    compat_color = Colors.GREEN if comparison.is_compatible else Colors.RED
+    print(f"\nBreaking change analysis: {Colors.BOLD}{symbol}{Colors.RESET}")
+    print(f"  {before_ref} → {after_ref}  |  {rel_path}:{line}")
+    print(
+        f"  Compatible: {compat_color}{'YES' if comparison.is_compatible else 'NO'}{Colors.RESET}"
+        f"  (score: {comparison.compatibility_score:.2f})\n"
+    )
+
+    if comparison.breaking_changes:
+        print(f"  {len(comparison.breaking_changes)} breaking change(s):\n")
+        for bc in comparison.breaking_changes:
+            sev_color = (
+                Colors.RED if bc.severity == "HIGH"
+                else Colors.YELLOW if bc.severity == "MEDIUM"
+                else Colors.RESET
+            )
+            print(f"  [{sev_color}{bc.severity}{Colors.RESET}] {bc.type}")
+            print(f"    {bc.impact}")
+            if bc.affected_elements:
+                print(f"    Affected: {', '.join(sorted(bc.affected_elements))}")
+            print()
+    else:
+        print(f"  {Colors.GREEN}No breaking changes detected.{Colors.RESET}\n")
+
+    if comparison.non_breaking_changes:
+        print(f"  {len(comparison.non_breaking_changes)} non-breaking change(s):")
+        for change in comparison.non_breaking_changes:
+            print(f"    - {change}")
+        print()
+
+    return 0 if comparison.is_compatible else 1
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -2813,6 +2934,7 @@ advanced analysis:
   scope <file>           File surface: exports, imports, internal symbols
   bottleneck [--top N]   Cross-file bridge nodes — architectural chokepoints
   layer [--config PATH]  Architecture layer violation detection
+  breaking-changes <sym> Detect breaking contract changes between two git refs
         """
     )
 
@@ -2943,6 +3065,21 @@ advanced analysis:
     p_layer.add_argument('--config', default=None,
                          help='Path to .smt_layers.json (default: <project>/.smt_layers.json)')
 
+    # breaking-changes
+    p_bc = sub.add_parser(
+        'breaking-changes',
+        help='Detect breaking contract changes for a function between two git refs',
+    )
+    p_bc.add_argument('symbol', help='Function name to analyze')
+    p_bc.add_argument(
+        '--before', default='HEAD~1', dest='before_ref',
+        help='Git ref for the old version (default: HEAD~1)',
+    )
+    p_bc.add_argument(
+        '--after', default='HEAD', dest='after_ref',
+        help='Git ref for the new version (default: HEAD)',
+    )
+
     args = parser.parse_args()
 
     if args.command == 'build':
@@ -2952,30 +3089,30 @@ advanced analysis:
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.context(args.symbol, depth=depth, compress=args.compress)
-            print(json.dumps(result, indent=2))
-            return 0 if result.get('found') else 1
+            print(json.dumps(result.model_dump(), indent=2))
+            return 0 if result.found else 1
         return cmd_context(args.symbol, depth=depth, callers=args.callers,
                           file_filter=args.file, compress=args.compress)
     elif args.command == 'definition':
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.definition(args.symbol)
-            print(json.dumps(result, indent=2))
-            return 0 if result.get('found') else 1
+            print(json.dumps(result.model_dump(), indent=2))
+            return 0 if result.found else 1
         return cmd_definition(args.symbol, file_filter=args.file)
     elif args.command == 'impact':
         depth = args.depth if args.depth is not None else _get_default_depth(3)
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.impact(args.symbol, depth=depth)
-            print(json.dumps(result, indent=2))
-            return 0 if result.get('found') else 1
+            print(json.dumps(result.model_dump(), indent=2))
+            return 0 if result.found else 1
         return cmd_impact(args.symbol, max_depth=depth, compress=args.compress)
     elif args.command == 'search':
         if getattr(args, 'json', False):
             engine = _get_engine()
             results = engine.search(args.query, top_k=args.top)
-            print(json.dumps(results, indent=2))
+            print(json.dumps(results.model_dump(), indent=2))
             return 0
         follow = 'context' if getattr(args, 'context', False) else ('impact' if getattr(args, 'impact', False) else None)
         return cmd_search(args.query, top_k=args.top, follow=follow)
@@ -3037,6 +3174,8 @@ advanced analysis:
         return cmd_bottleneck(limit=args.top)
     elif args.command == 'layer':
         return cmd_layer(config_path=args.config)
+    elif args.command == 'breaking-changes':
+        return cmd_breaking_changes(args.symbol, before_ref=args.before_ref, after_ref=args.after_ref)
     else:
         parser.print_help()
         return 0

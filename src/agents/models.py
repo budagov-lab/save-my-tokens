@@ -68,7 +68,7 @@ class EdgeRef(BaseModel):
     dst: str
 
 
-class CycleGroup(BaseModel):
+class CycleGroupRef(BaseModel):
     """A set of mutually recursive symbols collapsed into one representative."""
 
     model_config = ConfigDict(extra="ignore")
@@ -167,7 +167,7 @@ class ContextResult(BaseModel):
     root: Optional[Dict[str, Any]] = None
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
     edges: List[EdgeRef] = Field(default_factory=list)
-    cycles: List[CycleGroup] = Field(default_factory=list)
+    cycles: List[CycleGroupRef] = Field(default_factory=list)
     compressed: bool = False
     bridges_removed: int = 0
     original_node_count: int = 0
@@ -218,7 +218,7 @@ class ImpactResult(BaseModel):
     root: Optional[Dict[str, Any]] = None
     callers_by_depth: Dict[int, List[CallerRef]] = Field(default_factory=dict)
     total_callers: int = 0
-    cycles: List[CycleGroup] = Field(default_factory=list)
+    cycles: List[CycleGroupRef] = Field(default_factory=list)
     token_estimate: int = 0
     depth_reached: int = 0
 

@@ -1,4 +1,4 @@
-"""SMTQueryEngine: Structured query API for agents (no stdout, returns dicts)."""
+"""SMTQueryEngine: Structured query API for agents (no stdout, returns typed models)."""
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -13,6 +13,13 @@ from src.graph.neo4j_client import Neo4jClient
 from src.graph.validator import validate_graph
 from src.parsers.symbol import Symbol
 from src.parsers.symbol_index import SymbolIndex
+from src.agents.models import (
+    DefinitionResult,
+    ContextResult,
+    ImpactResult,
+    SearchResult,
+    StatusResult,
+)
 
 
 class SMTQueryEngine:
@@ -69,25 +76,15 @@ class SMTQueryEngine:
         self._embedding_service = EmbeddingService(symbol_index, self.embeddings_cache_dir)
         return self._embedding_service
 
-    def definition(self, symbol: str) -> Dict[str, Any]:
+    def definition(self, symbol: str) -> DefinitionResult:
         """Get definition of a symbol (1-hop, fast).
 
         Args:
             symbol: Symbol name to look up
 
         Returns:
-            {
-                "found": bool,
-                "name": str,
-                "labels": List[str],
-                "file": str,
-                "line": int,
-                "signature": Optional[str],
-                "docstring": Optional[str],
-                "callees": List[{"name": str, "file": str}],
-            }
-
-        Returns {"found": False} if symbol not found.
+            DefinitionResult with name, labels, file, line, signature, docstring, callees.
+            result.found is False if symbol not found.
         """
         try:
             pid = self.client.project_id
@@ -111,10 +108,10 @@ class SMTQueryEngine:
 
                 if not node:
                     logger.debug(f"Symbol '{symbol}' not found")
-                    return {"found": False, "symbol": symbol}
+                    return DefinitionResult(found=False, symbol=symbol)
 
                 n = node["n"]
-                result = {
+                raw: Dict[str, Any] = {
                     "found": True,
                     "name": n.get("name"),
                     "labels": list(n.labels),
@@ -132,18 +129,18 @@ class SMTQueryEngine:
                     "RETURN callee.name AS name, callee.file AS file",
                     **params,
                 ).data()
-                result["callees"] = callees
+                raw["callees"] = callees
 
                 logger.debug(f"Definition for '{symbol}': found, {len(callees)} callees")
-                return result
+                return DefinitionResult.model_validate(raw)
 
         except Exception as e:
             logger.error(f"definition() error: {e}")
-            return {"found": False, "symbol": symbol, "error": str(e)}
+            return DefinitionResult.model_validate({"found": False, "symbol": symbol, "error": str(e)})
 
     def context(
         self, symbol: str, depth: int = 2, compress: bool = False
-    ) -> Dict[str, Any]:
+    ) -> ContextResult:
         """Get working context for a symbol (bounded bidirectional).
 
         Args:
@@ -152,29 +149,15 @@ class SMTQueryEngine:
             compress: Remove bridge functions to save tokens
 
         Returns:
-            {
-                "found": bool,
-                "symbol": str,
-                "root": {"name", "file", "line", "labels"},
-                "nodes": [{"name", "file", "line", "labels"}, ...],
-                "edges": [{"src", "dst"}, ...],
-                "cycles": [{"members": [...], "representative": str}, ...],
-                "compressed": bool,
-                "bridges_removed": int,
-                "original_node_count": int,
-                "final_node_count": int,
-                "token_estimate": int,
-                "depth_reached": int,
-            }
-
-        Returns {"found": False} if symbol not found.
+            ContextResult with root, nodes, edges, cycles, and compression stats.
+            result.found is False if symbol not found.
         """
         try:
             # Get bounded subgraph (callees)
             subgraph = self.client.get_bounded_subgraph(symbol, max_depth=depth)
             if not subgraph:
                 logger.debug(f"Symbol '{symbol}' not found in graph")
-                return {"found": False, "symbol": symbol}
+                return ContextResult(found=False, symbol=symbol)
 
             root = subgraph["root"]
             nodes = subgraph["nodes"]
@@ -239,13 +222,13 @@ class SMTQueryEngine:
                 f"Context for '{symbol}': {result['final_node_count']} nodes, "
                 f"{len(result['cycles'])} cycles, depth={depth}"
             )
-            return result
+            return ContextResult.model_validate(result)
 
         except Exception as e:
             logger.error(f"context() error: {e}")
-            return {"found": False, "symbol": symbol, "error": str(e)}
+            return ContextResult.model_validate({"found": False, "symbol": symbol, "error": str(e)})
 
-    def impact(self, symbol: str, depth: int = 3) -> Dict[str, Any]:
+    def impact(self, symbol: str, depth: int = 3) -> ImpactResult:
         """Analyze impact of changing a symbol (reverse traversal).
 
         Args:
@@ -253,29 +236,15 @@ class SMTQueryEngine:
             depth: Max hop distance in reverse direction
 
         Returns:
-            {
-                "found": bool,
-                "symbol": str,
-                "root": {"name", "file", "line", "labels"},
-                "callers_by_depth": {
-                    1: [{"name", "file"}, ...],
-                    2: [{"name", "file"}, ...],
-                    ...
-                },
-                "total_callers": int,
-                "cycles": [{"members": [...], "representative": str}, ...],
-                "token_estimate": int,
-                "depth_reached": int,
-            }
-
-        Returns {"found": False} if symbol not found.
+            ImpactResult with callers_by_depth, total_callers, cycles, token_estimate.
+            result.found is False if symbol not found.
         """
         try:
             # Get impact graph (reverse CALLS)
             impact_graph = self.client.get_impact_graph(symbol, max_depth=depth)
             if not impact_graph:
                 logger.debug(f"Symbol '{symbol}' not found in graph")
-                return {"found": False, "symbol": symbol}
+                return ImpactResult(found=False, symbol=symbol)
 
             root = impact_graph["root"]
             nodes = impact_graph["nodes"]
@@ -341,18 +310,24 @@ class SMTQueryEngine:
                 f"Impact for '{symbol}': {result['total_callers']} callers, "
                 f"{len(result['cycles'])} cycles"
             )
-            return result
+            return ImpactResult.model_validate(result)
 
         except Exception as e:
             logger.error(f"impact() error: {e}")
-            return {"found": False, "symbol": symbol, "error": str(e)}
+            return ImpactResult.model_validate({"found": False, "symbol": symbol, "error": str(e)})
 
-    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 5) -> SearchResult:
         """Semantic search for symbols.
 
         Args:
             query: Natural language query or keywords
             top_k: Number of results to return
+
+        Returns:
+            SearchResult with hits list. Each hit has name, type, file, line, score.
+            Returns SearchResult with empty hits list on error.
+
+        Old return type was List[Dict]; use result.model_dump()["hits"] for compat.
 
         Returns:
             [
@@ -385,28 +360,21 @@ class SMTQueryEngine:
                 })
 
             logger.debug(f"Search for '{query}': {len(output)} results")
-            return output
+            return SearchResult.from_list(output, query=query)
 
         except Exception as e:
             logger.error(f"search() error: {e}")
-            return []
+            return SearchResult(error_reason="parse_error", error_message=str(e))
 
-    def status(self, repo_path: Optional[Path] = None) -> Dict[str, Any]:
+    def status(self, repo_path: Optional[Path] = None) -> StatusResult:
         """Check graph freshness and statistics.
 
         Args:
             repo_path: Path to git repository (defaults to cwd)
 
         Returns:
-            {
-                "is_fresh": bool,
-                "git_head": str,
-                "graph_head": Optional[str],
-                "commits_behind": int,
-                "node_count": int,
-                "edge_count": int,
-                "freshness_status": str,  # "fresh", "stale", "unknown"
-            }
+            StatusResult with is_fresh, git_head, graph_head, commits_behind,
+            node_count, edge_count, freshness_status.
         """
         try:
             repo_path = repo_path or Path.cwd()
@@ -436,20 +404,19 @@ class SMTQueryEngine:
             }
 
             logger.debug(f"Status: {freshness_status}, {stats['node_count']} nodes")
-            return result
+            return StatusResult.model_validate(result)
 
         except Exception as e:
             logger.error(f"status() error: {e}")
-            return {
+            return StatusResult.model_validate({
                 "is_fresh": False,
                 "git_head": "unknown",
-                "graph_head": None,
                 "commits_behind": -1,
                 "node_count": 0,
                 "edge_count": 0,
                 "freshness_status": "unknown",
                 "error": str(e),
-            }
+            })
 
     def close(self) -> None:
         """Close database connection."""
