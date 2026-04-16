@@ -306,74 +306,83 @@ class Neo4jClient:
         Returns empty dict if symbol not found.
         """
         max_depth = max(1, min(max_depth, 10))
-        pid_filter = "{name: $name, project_id: $pid}" if self.project_id else "{name: $name}"
         params: Dict[str, Any] = {"name": name}
         if self.project_id:
             params["pid"] = self.project_id
 
-        with self.driver.session() as session:
-            # Query 1: Find root node and all reachable nodes via directed CALLS edges
-            # is_root=true marks the start node explicitly — ORDER BY reorders rows so
-            # rows1[0] is NOT guaranteed to be the root without this flag.
-            query1 = f"""
-            MATCH (start {pid_filter})
-            OPTIONAL MATCH path = (start)-[:CALLS*1..{max_depth}]->(reached)
-            WITH start.node_id AS root_id, collect(DISTINCT reached) AS reachable, start
-            WITH root_id, [start] + reachable AS all_nodes
-            UNWIND all_nodes AS n
-            RETURN DISTINCT n.node_id AS node_id, n.name AS name,
-                   n.file AS file, n.line AS line, labels(n) AS labels,
-                   (n.node_id = root_id) AS is_root
-            ORDER BY n.name
+        # Single merged query: traverse nodes + collect edges in one round trip.
+        # node_rows is built as a list comprehension (scalar) before UNWIND so it
+        # survives the per-row explosion. OPTIONAL MATCH after UNWIND finds intra-
+        # subgraph edges; NULLs (unmatched OPTIONALs) are stripped in RETURN.
+        if self.project_id:
+            query = f"""
+            MATCH (start {{name: $name}})
+            WHERE start.project_id = $pid
+            OPTIONAL MATCH (start)-[:CALLS*1..{max_depth}]->(reached)
+            WHERE reached.project_id = $pid
+            WITH start, collect(DISTINCT reached) AS reachable
+            WITH start, [start] + reachable AS all_nodes
+            WITH start,
+                 [n IN all_nodes | {{
+                     node_id: n.node_id, name: n.name, file: n.file, line: n.line,
+                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                 }}] AS node_rows,
+                 all_nodes
+            UNWIND all_nodes AS a
+            OPTIONAL MATCH (a)-[:CALLS]->(b)
+            WHERE b IN all_nodes AND a.project_id = $pid AND b.project_id = $pid
+            WITH node_rows,
+                 collect(DISTINCT CASE WHEN b IS NOT NULL
+                     THEN {{src: a.name, dst: b.name}} ELSE null END) AS raw_edges
+            RETURN node_rows AS nodes,
+                   [e IN raw_edges WHERE e IS NOT NULL] AS edges
             """
-            result1 = session.run(query1, **params)
-            rows1 = list(result1)
+        else:
+            query = f"""
+            MATCH (start {{name: $name}})
+            OPTIONAL MATCH (start)-[:CALLS*1..{max_depth}]->(reached)
+            WITH start, collect(DISTINCT reached) AS reachable
+            WITH start, [start] + reachable AS all_nodes
+            WITH start,
+                 [n IN all_nodes | {{
+                     node_id: n.node_id, name: n.name, file: n.file, line: n.line,
+                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                 }}] AS node_rows,
+                 all_nodes
+            UNWIND all_nodes AS a
+            OPTIONAL MATCH (a)-[:CALLS]->(b)
+            WHERE b IN all_nodes
+            WITH node_rows,
+                 collect(DISTINCT CASE WHEN b IS NOT NULL
+                     THEN {{src: a.name, dst: b.name}} ELSE null END) AS raw_edges
+            RETURN node_rows AS nodes,
+                   [e IN raw_edges WHERE e IS NOT NULL] AS edges
+            """
 
-            if not rows1:
-                logger.debug(f"Symbol '{name}' not found in graph")
-                return {}
+        with self.driver.session() as session:
+            result = session.run(query, **params)
+            row = result.single()
 
-            # Extract root node by is_root flag — not by position (ORDER BY name reorders rows)
-            root_row = next((r for r in rows1 if r["is_root"]), rows1[0])
-            root_dict = dict(root_row)
-            root_dict["labels"] = root_dict.get("labels", [])
+        if not row:
+            logger.debug(f"Symbol '{name}' not found in graph")
+            return {}
 
-            # Collect all node_ids for edge filtering
-            node_ids = {row["node_id"] for row in rows1}
-            nodes = [dict(row) for row in rows1]
+        nodes: List[Dict[str, Any]] = [dict(n) for n in row["nodes"]]
+        edges: List[Dict[str, Any]] = [dict(e) for e in row["edges"]]
 
-            # Query 2: Get CALLS edges only between nodes in this subgraph.
-            # Also filter both ends by project_id to prevent cross-project edge leakage
-            # when node_ids collide (same file+line+name in two different projects).
-            if self.project_id:
-                query2 = """
-                MATCH (a {project_id: $pid})-[:CALLS]->(b {project_id: $pid})
-                WHERE a.node_id IN $node_ids AND b.node_id IN $node_ids
-                RETURN a.name AS src, b.name AS dst
-                ORDER BY src, dst
-                """
-                result2 = session.run(query2, node_ids=list(node_ids), pid=self.project_id)
-            else:
-                query2 = """
-                MATCH (a)-[:CALLS]->(b)
-                WHERE a.node_id IN $node_ids AND b.node_id IN $node_ids
-                RETURN a.name AS src, b.name AS dst
-                ORDER BY src, dst
-                """
-                result2 = session.run(query2, node_ids=list(node_ids))
-            edges = [dict(row) for row in result2]
+        root_dict = next((n for n in nodes if n.get("is_root")), nodes[0] if nodes else {})
 
-            logger.debug(
-                f"Bounded subgraph for '{name}': {len(nodes)} nodes, "
-                f"{len(edges)} edges, depth={max_depth}"
-            )
+        logger.debug(
+            f"Bounded subgraph for '{name}': {len(nodes)} nodes, "
+            f"{len(edges)} edges, depth={max_depth}"
+        )
 
-            return {
-                "root": root_dict,
-                "nodes": nodes,
-                "edges": edges,
-                "depth_reached": max_depth,
-            }
+        return {
+            "root": root_dict,
+            "nodes": nodes,
+            "edges": edges,
+            "depth_reached": max_depth,
+        }
 
     def get_impact_graph(self, name: str, max_depth: int = 3) -> Dict[str, Any]:
         """Get all nodes that call this symbol, directly or indirectly (reverse CALLS traversal).
@@ -395,71 +404,81 @@ class Neo4jClient:
         Returns empty dict if symbol not found.
         """
         max_depth = max(1, min(max_depth, 10))
-        pid_filter = "{name: $name, project_id: $pid}" if self.project_id else "{name: $name}"
         params: Dict[str, Any] = {"name": name}
         if self.project_id:
             params["pid"] = self.project_id
 
-        with self.driver.session() as session:
-            # Query 1: Find root node and all nodes that call it (reverse traversal)
-            query1 = f"""
-            MATCH (start {pid_filter})
-            OPTIONAL MATCH path = (caller)-[:CALLS*1..{max_depth}]->(start)
-            WITH start.node_id AS root_id, collect(DISTINCT caller) AS callers, start
-            WITH root_id, [start] + callers AS all_nodes
-            UNWIND all_nodes AS n
-            RETURN DISTINCT n.node_id AS node_id, n.name AS name,
-                   n.file AS file, n.line AS line, labels(n) AS labels,
-                   (n.node_id = root_id) AS is_root
-            ORDER BY n.name
+        # Single merged query: reverse traversal (callers) + intra-set edges in one trip.
+        # Same pattern as get_bounded_subgraph but traversal direction is reversed.
+        if self.project_id:
+            query = f"""
+            MATCH (start {{name: $name}})
+            WHERE start.project_id = $pid
+            OPTIONAL MATCH (caller)-[:CALLS*1..{max_depth}]->(start)
+            WHERE caller.project_id = $pid
+            WITH start, collect(DISTINCT caller) AS callers
+            WITH start, [start] + callers AS all_nodes
+            WITH start,
+                 [n IN all_nodes | {{
+                     node_id: n.node_id, name: n.name, file: n.file, line: n.line,
+                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                 }}] AS node_rows,
+                 all_nodes
+            UNWIND all_nodes AS a
+            OPTIONAL MATCH (a)-[:CALLS]->(b)
+            WHERE b IN all_nodes AND a.project_id = $pid AND b.project_id = $pid
+            WITH node_rows,
+                 collect(DISTINCT CASE WHEN b IS NOT NULL
+                     THEN {{src: a.name, dst: b.name}} ELSE null END) AS raw_edges
+            RETURN node_rows AS nodes,
+                   [e IN raw_edges WHERE e IS NOT NULL] AS edges
             """
-            result1 = session.run(query1, **params)
-            rows1 = list(result1)
+        else:
+            query = f"""
+            MATCH (start {{name: $name}})
+            OPTIONAL MATCH (caller)-[:CALLS*1..{max_depth}]->(start)
+            WITH start, collect(DISTINCT caller) AS callers
+            WITH start, [start] + callers AS all_nodes
+            WITH start,
+                 [n IN all_nodes | {{
+                     node_id: n.node_id, name: n.name, file: n.file, line: n.line,
+                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                 }}] AS node_rows,
+                 all_nodes
+            UNWIND all_nodes AS a
+            OPTIONAL MATCH (a)-[:CALLS]->(b)
+            WHERE b IN all_nodes
+            WITH node_rows,
+                 collect(DISTINCT CASE WHEN b IS NOT NULL
+                     THEN {{src: a.name, dst: b.name}} ELSE null END) AS raw_edges
+            RETURN node_rows AS nodes,
+                   [e IN raw_edges WHERE e IS NOT NULL] AS edges
+            """
 
-            if not rows1:
-                logger.debug(f"Symbol '{name}' not found in graph")
-                return {}
+        with self.driver.session() as session:
+            result = session.run(query, **params)
+            row = result.single()
 
-            # Extract root node by is_root flag — ORDER BY name reorders rows
-            root_row = next((r for r in rows1 if r["is_root"]), rows1[0])
-            root_dict = dict(root_row)
-            root_dict["labels"] = root_dict.get("labels", [])
+        if not row:
+            logger.debug(f"Symbol '{name}' not found in graph")
+            return {}
 
-            # Collect all node_ids for edge filtering
-            node_ids = {row["node_id"] for row in rows1}
-            nodes = [dict(row) for row in rows1]
+        nodes: List[Dict[str, Any]] = [dict(n) for n in row["nodes"]]
+        edges: List[Dict[str, Any]] = [dict(e) for e in row["edges"]]
 
-            # Query 2: Get CALLS edges only within this impact set.
-            # Also filter both ends by project_id to prevent cross-project edge leakage.
-            if self.project_id:
-                query2 = """
-                MATCH (a {project_id: $pid})-[:CALLS]->(b {project_id: $pid})
-                WHERE a.node_id IN $node_ids AND b.node_id IN $node_ids
-                RETURN a.name AS src, b.name AS dst
-                ORDER BY src, dst
-                """
-                result2 = session.run(query2, node_ids=list(node_ids), pid=self.project_id)
-            else:
-                query2 = """
-                MATCH (a)-[:CALLS]->(b)
-                WHERE a.node_id IN $node_ids AND b.node_id IN $node_ids
-                RETURN a.name AS src, b.name AS dst
-                ORDER BY src, dst
-                """
-                result2 = session.run(query2, node_ids=list(node_ids))
-            edges = [dict(row) for row in result2]
+        root_dict = next((n for n in nodes if n.get("is_root")), nodes[0] if nodes else {})
 
-            logger.debug(
-                f"Impact graph for '{name}': {len(nodes)} nodes, "
-                f"{len(edges)} edges, depth={max_depth}"
-            )
+        logger.debug(
+            f"Impact graph for '{name}': {len(nodes)} nodes, "
+            f"{len(edges)} edges, depth={max_depth}"
+        )
 
-            return {
-                "root": root_dict,
-                "nodes": nodes,
-                "edges": edges,
-                "depth_reached": max_depth,
-            }
+        return {
+            "root": root_dict,
+            "nodes": nodes,
+            "edges": edges,
+            "depth_reached": max_depth,
+        }
 
     def transaction(self):
         """Context manager for explicit transactions. Use with `with client.transaction() as tx:`.
