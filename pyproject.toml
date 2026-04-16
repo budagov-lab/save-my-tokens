@@ -32,6 +32,9 @@ full = [
     "tree-sitter>=0.20.4",
     "tree-sitter-python>=0.20.4",
     "tree-sitter-typescript>=0.20.4",
+    "tree-sitter-go>=0.25.0",
+    "tree-sitter-rust>=0.24.2",
+    "tree-sitter-java>=0.23.5",
 
     # Graph Database
     "neo4j>=5.14.0",
@@ -42,6 +45,9 @@ full = [
     "sentence-transformers>=2.2.0",
     "faiss-cpu>=1.7.4",
     "numpy>=1.24.0",
+
+    # Watch mode
+    "watchdog>=3.0.0",
 ]
 
 dev = [
@@ -117,9 +123,14 @@ warn_no_return = true
 [[tool.mypy.overrides]]
 module = [
     "tree_sitter.*",
+    "tree_sitter_go.*",
+    "tree_sitter_rust.*",
+    "tree_sitter_java.*",
     "neo4j.*",
     "faiss.*",
     "openai.*",
+    "watchdog.*",
+    "sentence_transformers.*",
 ]
 ignore_missing_imports = true
 

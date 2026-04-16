@@ -59,13 +59,23 @@ def validate_graph(neo4j_client: Neo4jClient, repo_path: Path) -> ValidationResu
             commits_behind=-1,
         )
 
-    # Get last indexed commit from Neo4j
+    # Get last indexed commit from Neo4j, scoped to current project when possible.
+    # Instead of filtering by project_id on the Commit node (commits don't carry project_id),
+    # we follow MODIFIED_BY edges from project-scoped symbol nodes to their commits.
     try:
         with neo4j_client.driver.session() as session:
-            result = session.run(
-                "MATCH (c:Commit) RETURN c.short_hash AS short_hash "
-                "ORDER BY c.timestamp DESC LIMIT 1"
-            )
+            if neo4j_client.project_id:
+                result = session.run(
+                    "MATCH (n {project_id: $pid})-[:MODIFIED_BY]->(c:Commit) "
+                    "RETURN c.short_hash AS short_hash "
+                    "ORDER BY c.timestamp DESC LIMIT 1",
+                    pid=neo4j_client.project_id,
+                )
+            else:
+                result = session.run(
+                    "MATCH (c:Commit) RETURN c.short_hash AS short_hash "
+                    "ORDER BY c.timestamp DESC LIMIT 1"
+                )
             record = result.single()
             graph_head = record["short_hash"] if record else None
     except Exception as e:
@@ -142,7 +152,7 @@ def format_validation_line(validation: ValidationResult) -> str:
         return f"HEAD {validation.git_head}  [✓] fresh"
 
     if validation.commits_behind < 0:
-        return f"HEAD {validation.git_head}  [?] unknown (run: smt diff)"
+        return f"HEAD {validation.git_head}  [?] unknown (run: smt sync)"
 
     if validation.commits_behind == 0:
         return f"HEAD {validation.git_head}  [!] out-of-sync"

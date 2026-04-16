@@ -1,6 +1,7 @@
 """Embedding service for semantic search using FAISS and SentenceTransformers."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +18,28 @@ try:
     import faiss
 except ImportError:
     faiss = None  # type: ignore[name-defined]
+
+
+def _find_git_head(start: Path) -> Optional[str]:
+    """Walk up the directory tree to find a .git dir and return HEAD hash, or None."""
+    path = start.resolve()
+    for _ in range(8):
+        if (path / ".git").exists():
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(path),
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.strip() if result.returncode == 0 else None
+            except OSError:
+                return None
+        parent = path.parent
+        if parent == path:
+            break
+        path = parent
+    return None
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -145,7 +168,7 @@ class EmbeddingService:
                 progress.update(task, description=f"{len(embeddings_to_add)} embeddings", advance=1)
 
         if not embeddings_to_add:
-            logger.warning("No embeddings generated. Check OpenAI API key and network.")
+            logger.warning("No embeddings generated. Check that the embedding model loaded correctly (see startup logs).")
             return
 
         # Add to FAISS index
@@ -276,6 +299,68 @@ class EmbeddingService:
             logger.info(f"Saved {len(self.embedding_cache)} embeddings to cache")
         except Exception as e:
             logger.warning(f"Failed to save embedding cache: {e}")
+
+    def save_index(self) -> None:
+        """Save FAISS index and id→symbol mapping to disk for fast reuse."""
+        if not self.index or not faiss:
+            return
+        try:
+            faiss.write_index(self.index, str(self.cache_dir / "faiss.index"))
+            symbols = {
+                str(idx): {
+                    "name": s.name, "type": s.type, "file": s.file,
+                    "line": s.line, "column": s.column,
+                    "docstring": s.docstring, "parent": s.parent,
+                }
+                for idx, s in self.id_to_symbol.items()
+            }
+            payload = {
+                "git_head": _find_git_head(self.cache_dir),
+                "symbols": symbols,
+            }
+            with open(self.cache_dir / "faiss_mapping.json", "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            logger.info(f"Saved FAISS index ({len(self.id_to_symbol)} symbols)")
+        except Exception as e:
+            logger.warning(f"Failed to save FAISS index: {e}")
+
+    def load_index(self) -> bool:
+        """Load pre-built FAISS index from disk. Returns True if successful (and fresh)."""
+        index_file = self.cache_dir / "faiss.index"
+        mapping_file = self.cache_dir / "faiss_mapping.json"
+        if not index_file.exists() or not mapping_file.exists() or not faiss:
+            return False
+        try:
+            with open(mapping_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Support both old flat format and new {git_head, symbols} format
+            if "symbols" in data:
+                saved_head = data.get("git_head")
+                current_head = _find_git_head(self.cache_dir)
+                if saved_head and current_head and saved_head != current_head:
+                    logger.info(
+                        f"FAISS index stale (built at {saved_head[:8]}, HEAD now {current_head[:8]}) — rebuilding"
+                    )
+                    return False
+                mapping = data["symbols"]
+            else:
+                mapping = data  # old format — load without staleness check
+
+            self.index = faiss.read_index(str(index_file))
+            self.id_to_symbol = {
+                int(idx): Symbol(
+                    name=d["name"], type=d["type"], file=d["file"], line=d["line"],
+                    column=d.get("column", 0), docstring=d.get("docstring"),
+                    parent=d.get("parent"),
+                )
+                for idx, d in mapping.items()
+            }
+            logger.info(f"Loaded FAISS index ({len(self.id_to_symbol)} symbols)")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to load FAISS index: {e}")
+            return False
 
     def get_stats(self) -> Dict[str, Any]:
         """Get embedding service statistics.

@@ -44,6 +44,7 @@ class Node:
     docstring: Optional[str] = None
     parent: Optional[str] = None
     metadata: Optional[Dict[str, str]] = None
+    project_id: str = ""
 
     def to_cypher_props(self) -> Dict[str, Any]:
         """Convert node to Neo4j node properties."""
@@ -54,13 +55,16 @@ class Node:
             "file": self.file,
             "line": self.line,
             "column": self.column,
+            "project_id": self.project_id,
         }
         if self.docstring:
             props["docstring"] = self.docstring
         if self.parent:
             props["parent"] = self.parent
         if self.metadata:
-            props.update(self.metadata)
+            # Exclude keys that would silently overwrite core identity properties.
+            _protected = {"node_id", "project_id", "name", "type", "file", "line", "column"}
+            props.update({k: v for k, v in self.metadata.items() if k not in _protected})
         return props
 
 

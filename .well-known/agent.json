@@ -1,6 +1,6 @@
 {
   "name": "save-my-tokens",
-  "description": "Semantic code graph for efficient codebase exploration. Provides symbol lookup, dependency analysis, impact assessment, and semantic search via the smt CLI.",
+  "description": "Semantic code graph for efficient codebase exploration. Provides symbol lookup, dependency analysis, impact assessment, dead code detection, cycle detection, coupling hotspots, module reports, and semantic search via the smt CLI.",
   "url": "local://smt-cli",
   "version": "1.0.0",
   "provider": {
@@ -57,18 +57,106 @@
     {
       "id": "smt-callers",
       "name": "Caller Lookup",
-      "description": "Shorthand for context with callers only. Who calls this symbol?",
+      "description": "Who calls this symbol? Uses context --callers flag for callers-only traversal.",
       "tags": ["code", "callers"],
       "examples": ["Who calls validate_graph?"],
-      "invoke": "smt callers <symbol>"
+      "invoke": "smt context <symbol> --callers"
     },
     {
       "id": "smt-analysis",
       "name": "Multi-Agent Analysis Harness",
-      "description": "Orchestrates Scout + Fabler + PathFinder subagents for deep codebase analysis: impact prediction, isolation finding, dependency mapping.",
+      "description": "Single-agent pipeline for deep codebase analysis: pre-flight, query, reason, report. Handles impact prediction, isolation finding, and dependency mapping.",
       "tags": ["analysis", "multi-agent", "impact", "isolation"],
       "examples": ["What breaks if I refactor CallAnalyzer?", "What parts can be worked on independently?"],
       "invoke": "/smt-analysis"
+    },
+    {
+      "id": "smt-list",
+      "name": "Symbol Listing",
+      "description": "Enumerate all symbols in the graph, optionally filtered by module/file path substring.",
+      "tags": ["code", "symbols", "listing"],
+      "examples": ["List all symbols", "Show symbols in graph module", "What's in src/parsers?"],
+      "invoke": "smt list [--module <path-substring>]"
+    },
+    {
+      "id": "smt-unused",
+      "name": "Dead Code Detection",
+      "description": "Find symbols with no callers — candidates for dead code removal. Entry points and public APIs are expected to appear here.",
+      "tags": ["code", "dead-code", "cleanup"],
+      "examples": ["Find dead code", "What functions are never called?", "Show unused symbols"],
+      "invoke": "smt unused"
+    },
+    {
+      "id": "smt-cycles",
+      "name": "Circular Dependency Detection",
+      "description": "Detect all circular dependencies in the call graph. Uses Tarjan's SCC algorithm, same as context/impact cycle collapse.",
+      "tags": ["code", "cycles", "dependencies", "architecture"],
+      "examples": ["Are there any circular dependencies?", "Show import cycles", "Find circular calls"],
+      "invoke": "smt cycles"
+    },
+    {
+      "id": "smt-hot",
+      "name": "Coupling Hotspots",
+      "description": "Most-called symbols ranked by unique caller count. High coupling = high refactoring risk.",
+      "tags": ["code", "coupling", "hotspots", "architecture"],
+      "examples": ["What are the most coupled functions?", "Find coupling hotspots", "Which symbols are called most?"],
+      "invoke": "smt hot [--top N]"
+    },
+    {
+      "id": "smt-path",
+      "name": "Dependency Path",
+      "description": "Shortest dependency path between two symbols via CALLS edges. Useful for understanding indirect coupling.",
+      "tags": ["code", "dependencies", "path"],
+      "examples": ["How does A depend on B?", "Find path from GraphBuilder to Neo4jClient", "Is A connected to B?"],
+      "invoke": "smt path <A> <B>"
+    },
+    {
+      "id": "smt-modules",
+      "name": "Module Coupling Report",
+      "description": "Files ranked by symbol count and cross-file CALLS coupling. Identifies architectural hotspots at the file level.",
+      "tags": ["code", "modules", "coupling", "architecture"],
+      "examples": ["Which files are most coupled?", "Show module dependencies", "Rank files by complexity"],
+      "invoke": "smt modules"
+    },
+    {
+      "id": "smt-changes",
+      "name": "Git Change Impact",
+      "description": "Symbols in git-changed files with caller counts, pinpointed by line range. The essential command for PR review — fuses git diff with graph impact in one shot.",
+      "tags": ["git", "impact", "pr-review", "changes"],
+      "examples": ["What changed in this PR?", "Show impact of recent commits", "smt changes main..feature-branch"],
+      "invoke": "smt changes [RANGE]"
+    },
+    {
+      "id": "smt-complexity",
+      "name": "God Function Detector",
+      "description": "Ranks symbols by fan-in × fan-out complexity score. Identifies 'god functions' that are both hard to refactor (many callees) and high blast-radius (many callers).",
+      "tags": ["code", "complexity", "refactoring", "architecture"],
+      "examples": ["Find god functions", "What's hardest to refactor?", "Show complexity ranking"],
+      "invoke": "smt complexity [--top N]"
+    },
+    {
+      "id": "smt-scope",
+      "name": "File Surface Analysis",
+      "description": "File-level view: what a file exports (called by other files), what it imports (calls into other files), and which symbols are internal. Bridges file-vs-symbol exploration.",
+      "tags": ["code", "scope", "architecture", "file"],
+      "examples": ["What does graph_builder.py export?", "Show the surface of neo4j_client", "What does parsers/python import?"],
+      "invoke": "smt scope <file-substring>"
+    },
+    {
+      "id": "smt-bottleneck",
+      "name": "Architectural Bottleneck",
+      "description": "Symbols that bridge distinct file clusters. Bridge score = (distinct caller files) × (distinct callee files) via cross-file edges. High score = structural chokepoint — removing this requires coordinating across subsystems.",
+      "tags": ["code", "architecture", "bottleneck", "coupling"],
+      "examples": ["Find architectural chokepoints", "What symbols connect subsystems?", "Where are the structural bridges?"],
+      "invoke": "smt bottleneck [--top N]"
+    },
+    {
+      "id": "smt-layer",
+      "name": "Architecture Layer Guard",
+      "description": "Detects forbidden dependency directions between architectural layers (e.g. parsers calling CLI). Configured via .smt_layers.json. Returns non-zero exit code on violations — safe for CI pipelines.",
+      "tags": ["architecture", "layers", "violations", "ci"],
+      "examples": ["Check for layer violations", "Are there any forbidden dependencies?", "Enforce architecture rules"],
+      "invoke": "smt layer [--config PATH]"
     }
   ],
   "authentication": {

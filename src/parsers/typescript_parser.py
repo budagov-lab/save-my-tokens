@@ -82,19 +82,20 @@ class TypeScriptParser(BaseParser):
     ):
         """Recursively extract symbols from AST node."""
         if node.type == "function_declaration":
-            symbols.append(
-                self._extract_function(node, source_code, file_path, parent)
-            )
+            sym = self._extract_function(node, source_code, file_path, parent)
+            if sym is not None:
+                symbols.append(sym)
             # Extract nested functions
             self._extract_nested(node, source_code, file_path, symbols, parent)
 
         elif node.type == "class_declaration":
             class_symbol = self._extract_class(node, source_code, file_path, parent)
-            symbols.append(class_symbol)
-            # Extract class methods
-            self._extract_class_members(
-                node, source_code, file_path, symbols, class_symbol.name
-            )
+            if class_symbol is not None:
+                symbols.append(class_symbol)
+                # Extract class methods
+                self._extract_class_members(
+                    node, source_code, file_path, symbols, class_symbol.name
+                )
 
         elif node.type == "method_definition":
             # Standalone method (shouldn't happen at top level)
@@ -104,12 +105,14 @@ class TypeScriptParser(BaseParser):
             symbols.extend(self._extract_imports(node, source_code, file_path))
 
         elif node.type == "interface_declaration":
-            symbols.append(
-                self._extract_interface(node, source_code, file_path, parent)
-            )
+            sym = self._extract_interface(node, source_code, file_path, parent)
+            if sym is not None:
+                symbols.append(sym)
 
         elif node.type == "type_alias_declaration":
-            symbols.append(self._extract_type_alias(node, source_code, file_path, parent))
+            sym = self._extract_type_alias(node, source_code, file_path, parent)
+            if sym is not None:
+                symbols.append(sym)
 
         # Recursively process all children
         for child in node.children:
@@ -174,7 +177,8 @@ class TypeScriptParser(BaseParser):
                         method = self._extract_method(
                             stmt, source_code, file_path, class_name
                         )
-                        symbols.append(method)
+                        if method is not None:
+                            symbols.append(method)
 
     def _extract_method(
         self,

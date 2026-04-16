@@ -74,17 +74,20 @@ class PythonParser(BaseParser):
     ):
         """Recursively extract symbols from AST node."""
         if node.type == "function_definition":
-            symbols.append(self._extract_function(node, source_code, file_path, parent))
+            sym = self._extract_function(node, source_code, file_path, parent)
+            if sym is not None:
+                symbols.append(sym)
             # Extract nested functions/classes
             self._extract_nested(node, source_code, file_path, symbols, parent)
 
         elif node.type == "class_definition":
             class_symbol = self._extract_class(node, source_code, file_path, parent)
-            symbols.append(class_symbol)
-            # Extract class methods
-            self._extract_class_members(
-                node, source_code, file_path, symbols, class_symbol.name
-            )
+            if class_symbol is not None:
+                symbols.append(class_symbol)
+                # Extract class methods
+                self._extract_class_members(
+                    node, source_code, file_path, symbols, class_symbol.name
+                )
 
         elif node.type == "import_statement":
             symbols.extend(self._extract_imports(node, source_code, file_path))
@@ -135,7 +138,8 @@ class PythonParser(BaseParser):
                         method = self._extract_function(
                             stmt, source_code, file_path, class_name
                         )
-                        symbols.append(method)
+                        if method is not None:
+                            symbols.append(method)
 
     def _extract_nested(
         self,

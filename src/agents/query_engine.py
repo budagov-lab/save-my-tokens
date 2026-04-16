@@ -30,6 +30,7 @@ class SMTQueryEngine:
         neo4j_user: Optional[str] = None,
         neo4j_password: Optional[str] = None,
         embeddings_cache_dir: Optional[Path] = None,
+        project_id: Optional[str] = None,
     ):
         """Initialize the query engine.
 
@@ -37,11 +38,12 @@ class SMTQueryEngine:
             neo4j_uri: Neo4j connection URI (defaults to config)
             neo4j_user: Neo4j user (defaults to config)
             neo4j_password: Neo4j password (defaults to config)
-            embeddings_cache_dir: Directory for cached embeddings (defaults to .claude/.embeddings)
+            embeddings_cache_dir: Directory for cached embeddings (defaults to .smt/embeddings)
+            project_id: Project isolation ID (12-char SHA256 prefix). Required for multi-project setups.
         """
-        self.client = Neo4jClient(neo4j_uri, neo4j_user, neo4j_password)
+        self.client = Neo4jClient(neo4j_uri, neo4j_user, neo4j_password, project_id=project_id or "")
         self.embeddings_cache_dir = embeddings_cache_dir or (
-            Path.cwd() / ".claude" / ".embeddings"
+            Path.cwd() / ".smt" / "embeddings"
         )
         self._embedding_service: Optional[EmbeddingService] = None
         logger.debug("SMTQueryEngine initialized")
@@ -88,10 +90,13 @@ class SMTQueryEngine:
         Returns {"found": False} if symbol not found.
         """
         try:
+            pid = self.client.project_id
+            pid_filter = "AND n.project_id = $pid" if pid else ""
             with self.client.driver.session() as session:
                 # Find the symbol
-                query = """
-                MATCH (n {name: $name})
+                query = f"""
+                MATCH (n {{name: $name}})
+                WHERE 1=1 {pid_filter}
                 RETURN n,
                        CASE WHEN n:Function THEN 0
                             WHEN n:Class THEN 1
@@ -99,7 +104,10 @@ class SMTQueryEngine:
                 ORDER BY priority
                 LIMIT 1
                 """
-                node = session.run(query, name=symbol).single()
+                params: Dict[str, Any] = {"name": symbol}
+                if pid:
+                    params["pid"] = pid
+                node = session.run(query, **params).single()
 
                 if not node:
                     logger.debug(f"Symbol '{symbol}' not found")
@@ -117,10 +125,12 @@ class SMTQueryEngine:
                 }
 
                 # Get callees (1 hop only)
+                callee_pid_filter = "AND callee.project_id = $pid" if pid else ""
                 callees = session.run(
-                    "MATCH (n {name: $name})-[:CALLS]->(callee) "
+                    f"MATCH (n {{name: $name}})-[:CALLS]->(callee) "
+                    f"WHERE 1=1 {pid_filter} {callee_pid_filter} "
                     "RETURN callee.name AS name, callee.file AS file",
-                    name=symbol,
+                    **params,
                 ).data()
                 result["callees"] = callees
 

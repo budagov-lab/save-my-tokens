@@ -3,7 +3,7 @@
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
@@ -20,6 +20,21 @@ try:
     from src.parsers.typescript_parser import TypeScriptParser
 except ImportError:
     TypeScriptParser = None  # type: ignore[name-defined]
+
+try:
+    from src.parsers.go_parser import GoParser
+except ImportError:
+    GoParser = None  # type: ignore[name-defined]
+
+try:
+    from src.parsers.rust_parser import RustParser
+except ImportError:
+    RustParser = None  # type: ignore[name-defined]
+
+try:
+    from src.parsers.java_parser import JavaParser
+except ImportError:
+    JavaParser = None  # type: ignore[name-defined]
 
 
 class IncrementalSymbolUpdater:
@@ -58,6 +73,9 @@ class IncrementalSymbolUpdater:
         # Initialize parsers
         self.python_parser = PythonParser(str(base_path)) if base_path else None
         self.typescript_parser = TypeScriptParser(str(base_path)) if base_path and TypeScriptParser else None  # type: ignore[operator]
+        self.go_parser = GoParser(str(base_path)) if base_path and GoParser else None  # type: ignore[operator]
+        self.rust_parser = RustParser(str(base_path)) if base_path and RustParser else None  # type: ignore[operator]
+        self.java_parser = JavaParser(str(base_path)) if base_path and JavaParser else None  # type: ignore[operator]
 
     def apply_delta(self, delta: SymbolDelta) -> UpdateResult:
         """Apply symbol changes to index and Neo4j transactionally.
@@ -178,41 +196,76 @@ class IncrementalSymbolUpdater:
             delta: SymbolDelta with changes
 
         Raises:
-            Exception: On database error (will be caught and rolled back)
+            Exception: On database error (will be caught by apply_delta for rollback)
         """
-        try:
-            # Start a transaction
-            tx = self.neo4j.begin_transaction()
+        with self.neo4j.transaction() as tx:
+            # 1. Delete nodes (+ edges via DETACH) for deleted symbols
+            for sym_name in delta.deleted:
+                self._delete_symbol_node(tx, delta.file, sym_name)
 
-            try:
-                # 1. Delete edges for deleted symbols
-                for sym_name in delta.deleted:
-                    self._delete_symbol_edges(tx, delta.file, sym_name)
-                    self._delete_symbol_node(tx, delta.file, sym_name)
+            # 2. Add new symbol nodes
+            for symbol in delta.added:
+                self._create_symbol_node(tx, symbol)
 
-                # 2. Add new symbol nodes
-                for symbol in delta.added:
-                    self._create_symbol_node(tx, symbol)
+            # 3. Replace modified symbol nodes (delete old, create new)
+            for symbol in delta.modified:
+                self._delete_symbol_node(tx, symbol.file, symbol.name)
+                self._create_symbol_node(tx, symbol)
 
-                # 3. Update edges for modified symbols
-                for symbol in delta.modified:
-                    # Delete old edges
-                    self._delete_symbol_edges(tx, symbol.file, symbol.name)
-                    # Create new node (or update existing)
-                    self._update_symbol_node(tx, symbol)
+        logger.debug(f"Neo4j transaction committed for {delta.file}")
 
-                # Commit the transaction
-                tx.commit()
-                logger.debug(f"Neo4j transaction committed for {delta.file}")
+    # Maps NodeType.value → Symbol.type (inverse of GraphBuilder._map_symbol_type_to_node_type)
+    _LABEL_TO_SYM_TYPE: Dict[str, str] = {
+        "Function": "function",
+        "Class": "class",
+        "Variable": "variable",
+        "Module": "import",
+        "Type": "type",
+        "Interface": "interface",
+    }
 
-            except Exception as e:
-                tx.rollback()
-                logger.error(f"Neo4j transaction failed: {e}. Rolling back.")
-                raise
+    @staticmethod
+    def _symbol_type_to_label(sym_type: str) -> str:
+        """Map Symbol.type string ('function', 'class', …) to Neo4j label."""
+        mapping = {
+            "function": "Function",
+            "class": "Class",
+            "variable": "Variable",
+            "import": "Module",
+            "type": "Type",
+            "interface": "Interface",
+        }
+        return mapping.get(sym_type, "Variable")
 
-        except Exception as e:
-            logger.error(f"Neo4j update failed: {e}")
-            raise
+    def _query_symbols_in_file(self, file_path: str) -> List[Symbol]:
+        """Query Neo4j for all symbol nodes in a file (the 'before' state for delta computation)."""
+        pid = self.neo4j.project_id or ""
+        pid_filter = "AND n.project_id = $pid" if pid else ""
+        query = f"""
+        MATCH (n)
+        WHERE n.file = $file AND n.name IS NOT NULL
+              AND NOT n:File AND NOT n:Commit
+              {pid_filter}
+        RETURN n.name AS name, n.type AS ntype, n.file AS file,
+               n.line AS line, n.column AS col, n.parent AS parent
+        """
+        params: Dict[str, Any] = {"file": file_path}
+        if pid:
+            params["pid"] = pid
+        symbols: List[Symbol] = []
+        with self.neo4j.driver.session() as session:
+            for row in session.run(query, **params):
+                # ntype is the NodeType.value stored in the node (e.g. "Function")
+                sym_type = self._LABEL_TO_SYM_TYPE.get(row["ntype"] or "", "variable")
+                symbols.append(Symbol(
+                    name=row["name"],
+                    type=sym_type,
+                    file=row["file"],
+                    line=row["line"] or 1,
+                    column=row["col"] or 0,
+                    parent=row["parent"],
+                ))
+        return symbols
 
     def _remove_symbol(self, symbol: Symbol) -> None:
         """Remove symbol from in-memory index.
@@ -226,82 +279,52 @@ class IncrementalSymbolUpdater:
         else:
             logger.warning(f"Symbol not in index: {symbol.qualified_name}")
 
-    def _delete_symbol_edges(
-        self, tx, file_path: str, symbol_name: str
-    ) -> None:
-        """Delete all edges connected to a symbol.
-
-        Args:
-            tx: Neo4j transaction
-            file_path: File containing symbol
-            symbol_name: Name of symbol
-        """
-        # Query: Match all edges where source or target is this symbol
-        query = """
-        MATCH (n:Symbol {file: $file, name: $name})-[r]-()
-        DELETE r
-        """
-        tx.run(query, file=file_path, name=symbol_name)
-        logger.debug(f"Deleted edges for {symbol_name} in {file_path}")
-
     def _delete_symbol_node(self, tx, file_path: str, symbol_name: str) -> None:
-        """Delete a symbol node from Neo4j.
-
-        Args:
-            tx: Neo4j transaction
-            file_path: File containing symbol
-            symbol_name: Name of symbol
-        """
-        # Ensure no edges remain
-        query = """
-        MATCH (n:Symbol {file: $file, name: $name})
-        DELETE n
-        """
-        tx.run(query, file=file_path, name=symbol_name)
+        """Delete a symbol node and all its edges from Neo4j (DETACH DELETE)."""
+        pid = self.neo4j.project_id or ""
+        pid_clause = "AND n.project_id = $pid" if pid else ""
+        query = f"MATCH (n {{file: $file, name: $name}}) WHERE 1=1 {pid_clause} DETACH DELETE n"
+        params: Dict[str, Any] = {"file": file_path, "name": symbol_name}
+        if pid:
+            params["pid"] = pid
+        tx.run(query, **params)
         logger.debug(f"Deleted node for {symbol_name} in {file_path}")
 
     def _create_symbol_node(self, tx, symbol: Symbol) -> None:
-        """Create a new symbol node in Neo4j.
-
-        Args:
-            tx: Neo4j transaction
-            symbol: Symbol to create
-        """
-        query = """
-        MERGE (n:Symbol {
-            qualified_name: $qname,
-            file: $file,
-            name: $name,
-            type: $type
-        })
-        SET n.line = $line,
+        """Create or update a symbol node in Neo4j using the correct label."""
+        label = self._symbol_type_to_label(symbol.type)
+        pid = self.neo4j.project_id or ""
+        node_id = symbol.node_id or f"{symbol.type}:{symbol.file}:{symbol.line}:{symbol.name}"
+        query = f"""
+        MERGE (n:{label} {{node_id: $node_id}})
+        SET n.name = $name,
+            n.type = $label,
+            n.file = $file,
+            n.line = $line,
             n.column = $column,
-            n.parent = $parent
+            n.parent = $parent,
+            n.project_id = $pid
         """
         tx.run(
             query,
-            qname=symbol.qualified_name,
-            file=symbol.file,
+            node_id=node_id,
             name=symbol.name,
-            type=symbol.type,
+            label=label,
+            file=symbol.file,
             line=symbol.line,
             column=symbol.column,
             parent=symbol.parent or "",
+            pid=pid,
         )
-        logger.debug(f"Created node for {symbol.qualified_name}")
+        logger.debug(f"Created/updated node for {symbol.qualified_name}")
 
-    def _update_symbol_node(self, tx, symbol: Symbol) -> None:
-        """Update an existing symbol node in Neo4j.
-
-        Args:
-            tx: Neo4j transaction
-            symbol: Updated symbol
-        """
-        # Try to merge - will create if doesn't exist
-        self._create_symbol_node(tx, symbol)
+    # _update_symbol_node removed — _update_neo4j now does delete + create for modified symbols
 
     def _rollback(self, file_path: str) -> None:
-        """Rollback to backup state on failure.
+        """Rollback in-memory index to pre-delta state for the given file.
+
+        Neo4j is rolled back automatically via the transaction context manager in
+        _update_neo4j. This method restores the in-memory SymbolIndex to match.
 
         Args:
             file_path: File being modified
@@ -310,10 +333,19 @@ class IncrementalSymbolUpdater:
             logger.warning("Cannot rollback: no backup available")
             return
 
-        logger.info(f"Rolling back changes to {file_path}")
-        # In production, we'd rebuild the index from backup
-        # This is simplified for now
+        logger.info(f"Rolling back in-memory index changes to {file_path}")
+
+        # Remove all current symbols for this file (the partial-update state)
+        for symbol in list(self.index.get_by_file(file_path)):
+            self.index.remove(symbol)
+
+        # Restore the backed-up symbols
+        for _, symbol in self._backup_index["symbols"]:
+            self.index.add(symbol)
+
+        restored = len(self._backup_index["symbols"])
         self._backup_index = None
+        logger.info(f"Rolled back {restored} symbols for {file_path}")
 
     def _run_git(self, args: List[str], cwd: Optional[str] = None) -> str:
         """Run a git command and return output.
@@ -418,6 +450,18 @@ class IncrementalSymbolUpdater:
             if not self.typescript_parser:
                 raise RuntimeError("TypeScript parser not available")
             return self.typescript_parser.parse_file(abs_path)
+        elif ext == ".go":
+            if not self.go_parser:
+                raise RuntimeError("Go parser not available (pip install tree-sitter-go)")
+            return self.go_parser.parse_file(abs_path)
+        elif ext == ".rs":
+            if not self.rust_parser:
+                raise RuntimeError("Rust parser not available (pip install tree-sitter-rust)")
+            return self.rust_parser.parse_file(abs_path)
+        elif ext == ".java":
+            if not self.java_parser:
+                raise RuntimeError("Java parser not available (pip install tree-sitter-java)")
+            return self.java_parser.parse_file(abs_path)
         else:
             raise RuntimeError(f"Unsupported file type: {ext}")
 
@@ -446,8 +490,8 @@ class IncrementalSymbolUpdater:
                 added.append(after_sym)
             else:
                 before_sym = before_map[qname]
-                # Check if signature or line changed (simplified)
-                if before_sym.signature != after_sym.signature or before_sym.line != after_sym.line:
+                # Modified = line number changed (symbol moved) or type changed
+                if before_sym.line != after_sym.line or before_sym.type != after_sym.type:
                     modified.append(after_sym)
 
         # Find deleted symbols
@@ -545,7 +589,8 @@ class IncrementalSymbolUpdater:
 
                         # Handle deleted files
                         if status == "D":
-                            before_symbols = self.index.get_by_file(abs_path)
+                            # Query Neo4j for current symbols (the "before" state)
+                            before_symbols = self._query_symbols_in_file(abs_path)
                             delta = SymbolDelta(
                                 file=abs_path,
                                 added=[],
@@ -554,12 +599,13 @@ class IncrementalSymbolUpdater:
                             )
                             result = self.apply_delta(delta)
                             if result.success:
-                                all_changed_ids.update([s.node_id for s in before_symbols])
+                                all_changed_ids.update([s.node_id for s in before_symbols if s.node_id])
                         # Handle added/modified files
                         elif status in ("A", "M"):
                             try:
                                 after_symbols = self._parse_file(abs_path)
-                                before_symbols = self.index.get_by_file(abs_path) if status == "M" else []
+                                # Query Neo4j for "before" state (not the empty in-memory index)
+                                before_symbols = self._query_symbols_in_file(abs_path) if status == "M" else []
 
                                 delta = self._compute_delta(abs_path, before_symbols, after_symbols)
                                 result = self.apply_delta(delta)
@@ -618,53 +664,44 @@ class IncrementalSymbolUpdater:
         """Validate graph consistency after updates.
 
         Checks:
-        1. Referential integrity (edges have valid source/target)
-        2. Symbol uniqueness per file
-        3. Valid edge types
+        1. No symbol nodes missing required fields (name or file)
+        2. No duplicate (name, file) pairs within the project
 
         Returns:
             True if graph is consistent
         """
         logger.info("Validating graph consistency...")
 
-        # 1. Check referential integrity
-        orphaned = self.neo4j.query(
-            """
-            MATCH (s)-[r]-(t)
-            WHERE NOT EXISTS((s)) OR NOT EXISTS((t))
-            RETURN count(r) as count
-        """
-        )
-        if orphaned and orphaned[0][0] > 0:
-            logger.error(f"Found {orphaned[0][0]} orphaned edges")
-            return False
+        pid = self.neo4j.project_id or ""
+        pid_filter = " AND n.project_id = $pid" if pid else ""
+        params: Dict[str, Any] = {}
+        if pid:
+            params["pid"] = pid
 
-        # 2. Check symbol uniqueness per file
-        duplicates = self.neo4j.query(
-            """
-            MATCH (s1:Symbol)--(f:File), (s2:Symbol)--(f)
-            WHERE s1.name = s2.name AND s1.id <> s2.id
-            RETURN count(*) as count
-        """
-        )
-        if duplicates and duplicates[0][0] > 0:
-            logger.error(f"Found {duplicates[0][0]} duplicate symbols")
-            return False
+        with self.neo4j.driver.session() as session:
+            # 1. Nodes with missing name or file
+            result = session.run(
+                f"MATCH (n) WHERE (n.name IS NULL OR n.file IS NULL)"
+                f"{pid_filter} AND NOT n:File AND NOT n:Commit "
+                "RETURN count(n) AS cnt",
+                **params,
+            )
+            missing = result.single()["cnt"]
+            if missing > 0:
+                logger.error(f"Found {missing} nodes with missing name or file")
+                return False
 
-        # 3. Check edge types are valid
-        valid_types = {"IMPORTS", "CALLS", "DEFINES", "INHERITS", "DEPENDS_ON", "TYPE_OF", "IMPLEMENTS"}
-        invalid = self.neo4j.query(
-            """
-            MATCH ()-[r]->()
-            RETURN DISTINCT r.type as type
-        """
-        )
-        if invalid:
-            for row in invalid:
-                edge_type = row[0]
-                if edge_type not in valid_types:
-                    logger.error(f"Invalid edge type: {edge_type}")
-                    return False
+            # 2. Duplicate (name, file) pairs — same symbol indexed twice
+            result = session.run(
+                f"MATCH (n) WHERE NOT n:File AND NOT n:Commit{pid_filter} "
+                "WITH n.file AS file, n.name AS name, count(*) AS cnt "
+                "WHERE cnt > 1 RETURN count(*) AS duplicates",
+                **params,
+            )
+            duplicates = result.single()["duplicates"]
+            if duplicates > 0:
+                logger.error(f"Found {duplicates} duplicate (file, name) pairs")
+                return False
 
-        logger.info("✓ Graph consistency validated")
+        logger.info("Graph consistency validated")
         return True

@@ -135,7 +135,7 @@ Impact: Neo4jClient  [Class]
 smt search "cycle detection"
 
 # Sync graph after commits (incremental, ~10x faster than full rebuild)
-smt diff HEAD~1..HEAD
+smt sync HEAD~1..HEAD
 
 # Full rebuild
 smt build --clear
@@ -161,11 +161,11 @@ smt build --clear              Wipe and rebuild
 
 smt definition SYMBOL          1-hop lookup
 smt context SYMBOL [--depth N] [--compress]   Bidirectional context
+smt context SYMBOL --callers   Callers-only traversal
 smt impact SYMBOL [--depth N]  Reverse traversal
-smt callers SYMBOL             Shorthand for context (callers only)
 smt search QUERY               Semantic search by meaning
 
-smt diff [RANGE]               Incremental sync (default: HEAD~1..HEAD)
+smt sync [RANGE]               Incremental sync (default: HEAD~1..HEAD)
 smt status                     Graph health check
 
 smt docker up|down|status      Manage Neo4j container

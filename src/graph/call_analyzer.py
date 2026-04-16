@@ -26,6 +26,7 @@ class CallAnalyzer:
         file_path: str,
         body_node_type: str,
         call_node_type: str,
+        call_name_field: str = "function",
     ) -> List[str]:
         """Unified call extraction for any language.
 
@@ -34,7 +35,10 @@ class CallAnalyzer:
             source_code: Source code bytes
             file_path: File path of the source
             body_node_type: Type of body node ("block" for Python, "statement_block" for TypeScript)
-            call_node_type: Type of call node ("call" for Python, "call_expression" for TypeScript)
+            call_node_type: Type of call node ("call" for Python, "call_expression" for TypeScript,
+                            "method_invocation" for Java)
+            call_name_field: Field name for the callee within a call node ("function" for most
+                             languages, "name" for Java method_invocation)
 
         Returns:
             List of called function node_ids
@@ -50,7 +54,7 @@ class CallAnalyzer:
             return []
 
         # Recursively find all call nodes
-        self._find_call_nodes(body_node, source_code, file_path, call_node_type, calls)
+        self._find_call_nodes(body_node, source_code, file_path, call_node_type, calls, call_name_field)
         return list(calls)
 
     def extract_calls_python(
@@ -94,6 +98,7 @@ class CallAnalyzer:
         file_path: str,
         call_node_type: str,
         calls: Set[str],
+        call_name_field: str = "function",
     ) -> None:
         """Recursively find call nodes in AST (unified for all languages).
 
@@ -101,12 +106,13 @@ class CallAnalyzer:
             node: Current tree-sitter node
             source_code: Source code bytes
             file_path: File path of source
-            call_node_type: Type of call node ("call" or "call_expression")
+            call_node_type: Type of call node ("call" or "call_expression" or "method_invocation")
             calls: Set to accumulate found calls
+            call_name_field: Field name for the callee ("function" for most, "name" for Java)
         """
         if node.type == call_node_type:
             # Extract the function name being called
-            func_node = node.child_by_field_name("function")
+            func_node = node.child_by_field_name(call_name_field)
             if func_node:
                 func_name = source_code[
                     func_node.start_byte : func_node.end_byte
@@ -117,36 +123,18 @@ class CallAnalyzer:
 
         # Recurse into children
         for child in node.children:
-            self._find_call_nodes(child, source_code, file_path, call_node_type, calls)
+            self._find_call_nodes(child, source_code, file_path, call_node_type, calls, call_name_field)
 
     def _find_call_nodes_python(
         self, node: TSNode, source_code: bytes, file_path: str, calls: Set[str]
     ) -> None:
-        """Recursively find call nodes in Python AST.
-
-        Wrapper around _find_call_nodes() for backward compatibility.
-
-        Args:
-            node: Current tree-sitter node
-            source_code: Source code bytes
-            file_path: File path of source
-            calls: Set to accumulate found calls
-        """
+        """Recursively find call nodes in Python AST (backward compatibility wrapper)."""
         self._find_call_nodes(node, source_code, file_path, "call", calls)
 
     def _find_call_nodes_typescript(
         self, node: TSNode, source_code: bytes, file_path: str, calls: Set[str]
     ) -> None:
-        """Recursively find call nodes in TypeScript AST.
-
-        Wrapper around _find_call_nodes() for backward compatibility.
-
-        Args:
-            node: Current tree-sitter node
-            source_code: Source code bytes
-            file_path: File path of source
-            calls: Set to accumulate found calls
-        """
+        """Recursively find call nodes in TypeScript AST (backward compatibility wrapper)."""
         self._find_call_nodes(node, source_code, file_path, "call_expression", calls)
 
     def _resolve_call_name(self, call_name: str, file_path: str) -> Optional[str]:

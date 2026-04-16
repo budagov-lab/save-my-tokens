@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Neo4j Configuration
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
-    NEO4J_PASSWORD: str = "password"  # WARNING: Change in production (use env var: NEO4J_PASSWORD)
+    NEO4J_PASSWORD: str = "password"  # Set via env var NEO4J_PASSWORD — default is for local dev only
 
     # Embedding Configuration
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"

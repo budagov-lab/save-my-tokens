@@ -19,22 +19,42 @@ try:
 except ImportError:
     TypeScriptParser = None  # type: ignore[name-defined]
 
+try:
+    from src.parsers.go_parser import GoParser
+except ImportError:
+    GoParser = None  # type: ignore[name-defined]
+
+try:
+    from src.parsers.rust_parser import RustParser
+except ImportError:
+    RustParser = None  # type: ignore[name-defined]
+
+try:
+    from src.parsers.java_parser import JavaParser
+except ImportError:
+    JavaParser = None  # type: ignore[name-defined]
+
 
 class GraphBuilder:
     """Orchestrates the full pipeline: Parse -> Index -> Create Graph Nodes -> Create Graph Edges."""
 
-    def __init__(self, base_path: str, neo4j_client: Optional[Neo4jClient] = None):
+    def __init__(self, base_path: str, neo4j_client: Optional[Neo4jClient] = None, project_id: str = ""):
         """Initialize graph builder.
 
         Args:
             base_path: Root directory of code to analyze
             neo4j_client: Neo4j client (created if not provided)
+            project_id: Project namespace for graph isolation
         """
         self.base_path = Path(base_path)
-        self.neo4j_client = neo4j_client or Neo4jClient()
+        self.project_id = project_id
+        self.neo4j_client = neo4j_client or Neo4jClient(project_id=project_id)
         self.import_resolver = ImportResolver(str(self.base_path))
         self.python_parser = PythonParser(str(self.base_path))
         self.typescript_parser = TypeScriptParser(str(self.base_path)) if TypeScriptParser else None  # type: ignore[operator]
+        self.go_parser = GoParser(str(self.base_path)) if GoParser else None  # type: ignore[operator]
+        self.rust_parser = RustParser(str(self.base_path)) if RustParser else None  # type: ignore[operator]
+        self.java_parser = JavaParser(str(self.base_path)) if JavaParser else None  # type: ignore[operator]
         self.symbol_index: SymbolIndex = SymbolIndex()
         self.call_analyzer = CallAnalyzer(self.symbol_index)
         self.nodes: List[Node] = []
@@ -70,21 +90,47 @@ class GraphBuilder:
             self._build_embeddings_and_index()
             logger.info("Embeddings and FAISS index ready for semantic search")
 
+    # Directories to always skip when scanning source files
+    _SKIP_DIRS = {
+        "node_modules", ".next", ".venv", "venv", "__pycache__",
+        "generated", "dist", "build", "target", ".git", ".tox", "coverage",
+        "htmlcov", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    }
+
+    @classmethod
+    def _should_skip(cls, file_path: Path) -> bool:
+        return any(part in cls._SKIP_DIRS for part in file_path.parts)
+
     def _parse_all_files(self) -> None:
-        """Parse all Python and TypeScript files in base_path."""
+        """Parse all supported source files (Python, TypeScript, Go, Rust, Java) in base_path."""
         # Collect all files first
         all_files = []
         python_files = list(self.base_path.rglob("*.py"))
         for file_path in python_files:
-            if ".venv" not in str(file_path) and "__pycache__" not in str(file_path):
+            if not self._should_skip(file_path):
                 all_files.append((file_path, "python"))
 
         if self.typescript_parser:
             ts_files = list(self.base_path.rglob("*.ts")) + list(self.base_path.rglob("*.tsx"))
             js_files = list(self.base_path.rglob("*.js")) + list(self.base_path.rglob("*.jsx"))
             for file_path in ts_files + js_files:
-                if "node_modules" not in str(file_path) and ".next" not in str(file_path):
+                if not self._should_skip(file_path):
                     all_files.append((file_path, "typescript"))
+
+        if self.go_parser:
+            for file_path in self.base_path.rglob("*.go"):
+                if not self._should_skip(file_path):
+                    all_files.append((file_path, "go"))
+
+        if self.rust_parser:
+            for file_path in self.base_path.rglob("*.rs"):
+                if not self._should_skip(file_path):
+                    all_files.append((file_path, "rust"))
+
+        if self.java_parser:
+            for file_path in self.base_path.rglob("*.java"):
+                if not self._should_skip(file_path):
+                    all_files.append((file_path, "java"))
 
         # Parse with progress bar
         with Progress(
@@ -100,8 +146,14 @@ class GraphBuilder:
                 try:
                     if file_type == "python":
                         symbols = self.python_parser.parse_file(str(file_path))
-                    else:
+                    elif file_type == "typescript":
                         symbols = self.typescript_parser.parse_file(str(file_path))
+                    elif file_type == "go":
+                        symbols = self.go_parser.parse_file(str(file_path))
+                    elif file_type == "rust":
+                        symbols = self.rust_parser.parse_file(str(file_path))
+                    else:  # java
+                        symbols = self.java_parser.parse_file(str(file_path))
 
                     self.symbol_index.add_all(symbols)
                     logger.debug(f"Parsed {file_path}: {len(symbols)} symbols")
@@ -136,6 +188,7 @@ class GraphBuilder:
                         file=symbol.file,
                         line=1,
                         column=1,
+                        project_id=self.project_id,
                     )
                     self.nodes.append(file_node)
 
@@ -154,14 +207,42 @@ class GraphBuilder:
                     column=symbol.column,
                     docstring=symbol.docstring,
                     parent=symbol.parent,
+                    project_id=self.project_id,
                 )
                 self.nodes.append(node)
                 progress.update(task, description=f"{len(self.nodes)} nodes", advance=1)
 
+    def _build_line_index(self, root_node: any, file_ext: str) -> Dict[int, any]:  # type: ignore[name-defined]
+        """Build a {start_line: tree_node} index for function nodes in a file.
+
+        Avoids re-traversing the full AST for every symbol by indexing once per file.
+        """
+        if file_ext == ".py":
+            func_types = ("function_definition",)
+        elif file_ext in (".ts", ".tsx", ".js", ".jsx"):
+            func_types = ("function_declaration", "arrow_function", "method_definition")
+        elif file_ext == ".go":
+            func_types = ("function_declaration", "method_declaration")
+        elif file_ext == ".rs":
+            func_types = ("function_item",)
+        elif file_ext == ".java":
+            func_types = ("method_declaration", "constructor_declaration")
+        else:
+            func_types = ("function_declaration",)
+
+        index: Dict[int, any] = {}  # type: ignore[type-arg]
+        stack = [root_node]
+        while stack:
+            node = stack.pop()
+            if node.type in func_types:
+                index[node.start_point[0]] = node
+            stack.extend(node.children)
+        return index
+
     def _create_edges(self) -> None:
         """Create edges from symbol relationships."""
-        # File cache for CALLS edge generation: file_path -> (source_bytes, tree)
-        file_cache: Dict[str, Tuple[bytes, any]] = {}  # type: ignore[type-arg]
+        # File cache for CALLS edge generation: file_path -> (source_bytes, tree, line_index)
+        file_cache: Dict[str, Tuple[bytes, any, Dict[int, any]]] = {}  # type: ignore[type-arg]
 
         symbols = self.symbol_index.get_all()
         with Progress(
@@ -227,12 +308,32 @@ class GraphBuilder:
                     file_path = symbol.file
                     ext = Path(file_path).suffix.lower()
 
-                    # Determine which parser to use
+                    # Determine which parser and call conventions to use
                     parser_obj = None
+                    body_type = "block"
+                    call_type = "call"
+                    call_name_field = "function"
                     if ext == ".py":
                         parser_obj = self.python_parser
+                        body_type = "block"
+                        call_type = "call"
                     elif ext in (".ts", ".tsx", ".js", ".jsx"):
                         parser_obj = self.typescript_parser
+                        body_type = "statement_block"
+                        call_type = "call_expression"
+                    elif ext == ".go":
+                        parser_obj = self.go_parser
+                        body_type = "block"
+                        call_type = "call_expression"
+                    elif ext == ".rs":
+                        parser_obj = self.rust_parser
+                        body_type = "block"
+                        call_type = "call_expression"
+                    elif ext == ".java":
+                        parser_obj = self.java_parser
+                        body_type = "block"
+                        call_type = "method_invocation"
+                        call_name_field = "name"
                     else:
                         continue
 
@@ -241,25 +342,25 @@ class GraphBuilder:
                         continue
 
                     try:
-                        # Re-parse file (cached per file)
+                        # Re-parse file (cached per file); build line index once per file
                         if file_path not in file_cache:
                             with open(file_path, "rb") as f:
                                 source_bytes = f.read()
                             tree = parser_obj.parser.parse(source_bytes)
-                            file_cache[file_path] = (source_bytes, tree)
+                            line_index = self._build_line_index(tree.root_node, ext)
+                            file_cache[file_path] = (source_bytes, tree, line_index)
 
-                        source_bytes, tree = file_cache[file_path]
+                        source_bytes, tree, line_index = file_cache[file_path]
 
-                        # Find the function node matching this symbol's line (convert 1-indexed to 0-indexed)
-                        func_node = self._find_node_at_line(tree.root_node, symbol.line - 1, ext)
+                        # O(1) lookup via pre-built line index (convert 1-indexed to 0-indexed)
+                        func_node = line_index.get(symbol.line - 1)
                         if func_node is None:
                             continue
 
                         # Extract calls
-                        body_type = "block" if ext == ".py" else "statement_block"
-                        call_type = "call" if ext == ".py" else "call_expression"
                         callee_ids = self.call_analyzer.extract_calls(
-                            func_node, source_bytes, file_path, body_type, call_type
+                            func_node, source_bytes, file_path, body_type, call_type,
+                            call_name_field=call_name_field,
                         )
 
                         # Create CALLS edges
@@ -296,44 +397,16 @@ class GraphBuilder:
             logger.info("Building embeddings and FAISS index for semantic search...")
 
             # Create embedding service
-            cache_dir = Path(self.base_path).parent / '.claude' / '.embeddings'
+            cache_dir = Path(self.base_path).parent / '.smt' / 'embeddings'
             svc = EmbeddingService(self.symbol_index, cache_dir=cache_dir)
 
             # Build the FAISS index (generates embeddings for all symbols)
             svc.build_index()
+            svc.save_index()
 
             logger.info(f"Embeddings built for {len(self.symbol_index.get_all())} symbols")
         except Exception as e:
             logger.warning(f"Failed to build embeddings/index: {e}. Semantic search will generate them on first use.")
-
-    def _find_node_at_line(self, node: any, target_line: int, file_ext: str) -> Optional[any]:  # type: ignore[name-defined]
-        """Find a function/method definition node at a specific line (0-indexed).
-
-        Args:
-            node: Current tree-sitter node to search
-            target_line: 0-indexed line number to find
-            file_ext: File extension (.py, .ts, etc) to determine node types to search for
-
-        Returns:
-            Tree-sitter node for the function at that line, or None if not found
-        """
-        # Determine the node type names based on file extension
-        if file_ext == ".py":
-            func_types = ("function_definition",)
-        else:  # TypeScript/JavaScript
-            func_types = ("function_declaration", "arrow_function", "method_definition")
-
-        # Check if current node is a function definition at the target line
-        if node.type in func_types and node.start_point[0] == target_line:
-            return node
-
-        # Recursively search children
-        for child in node.children:
-            result = self._find_node_at_line(child, target_line, file_ext)
-            if result:
-                return result
-
-        return None
 
     @staticmethod
     def _map_symbol_type_to_node_type(symbol_type: str) -> NodeType:

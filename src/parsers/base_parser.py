@@ -107,6 +107,11 @@ class BaseParser(ABC):
             Symbol object
         """
         name = self._get_child_text(node, "name", source_code)
+        if name is None:
+            logger.warning(
+                f"No 'name' field on {node.type} node at {file_path}:{node.start_point[0] + 1} — skipping"
+            )
+            return None  # type: ignore[return-value]
         docstring = self._get_docstring(node, source_code)
 
         return Symbol(
