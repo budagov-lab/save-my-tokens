@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
 from src.graph.neo4j_client import Neo4jClient
 from src.graph.node_types import CommitNode
@@ -163,11 +163,13 @@ class IncrementalSymbolUpdater:
             for symbol in to_remove:
                 self._remove_symbol(symbol)
 
-        # 2. Add new symbols (check for conflicts)
+        # 2. Add new symbols (check for conflicts within the same file)
         for symbol in delta.added:
-            # Verify no duplicate in the same file
-            existing = self.index.get_by_qualified_name(symbol.qualified_name)
-            if existing:
+            existing_in_file = [
+                s for s in self.index.get_by_file(delta.file)
+                if s.qualified_name == symbol.qualified_name
+            ]
+            if existing_in_file:
                 raise ValueError(
                     f"Symbol conflict: {symbol.qualified_name} "
                     f"already exists in {delta.file}"

@@ -3,10 +3,10 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
-from neo4j import GraphDatabase, Session
+from neo4j import GraphDatabase
 
 from src.config import settings
-from src.graph.node_types import CommitNode, Edge, Node, NodeType
+from src.graph.node_types import CommitNode, Edge, Node
 
 
 class _ManagedTransaction:
@@ -288,12 +288,15 @@ class Neo4jClient:
 
         return {"node_count": node_count, "edge_count": edge_count}
 
-    def get_bounded_subgraph(self, name: str, max_depth: int = 3) -> Dict[str, Any]:
+    def get_bounded_subgraph(
+        self, name: str, max_depth: int = 3, file_filter: str | None = None
+    ) -> Dict[str, Any]:
         """Get all nodes and directed CALLS edges reachable from a symbol within max_depth.
 
         Args:
             name: Symbol name to start from
             max_depth: Maximum hop distance (1-10 recommended)
+            file_filter: Optional file path substring to disambiguate symbols with the same name
 
         Returns:
             {
@@ -309,6 +312,10 @@ class Neo4jClient:
         params: Dict[str, Any] = {"name": name}
         if self.project_id:
             params["pid"] = self.project_id
+        file_clause = ""
+        if file_filter:
+            params["file_filter"] = file_filter
+            file_clause = " AND start.file CONTAINS $file_filter"
 
         # Single merged query: traverse nodes + collect edges in one round trip.
         # node_rows is built as a list comprehension (scalar) before UNWIND so it
@@ -317,7 +324,7 @@ class Neo4jClient:
         if self.project_id:
             query = f"""
             MATCH (start {{name: $name}})
-            WHERE start.project_id = $pid
+            WHERE start.project_id = $pid{file_clause}
             OPTIONAL MATCH (start)-[:CALLS*1..{max_depth}]->(reached)
             WHERE reached.project_id = $pid
             WITH start, collect(DISTINCT reached) AS reachable
@@ -340,6 +347,7 @@ class Neo4jClient:
         else:
             query = f"""
             MATCH (start {{name: $name}})
+            WHERE true{file_clause}
             OPTIONAL MATCH (start)-[:CALLS*1..{max_depth}]->(reached)
             WITH start, collect(DISTINCT reached) AS reachable
             WITH start, [start] + reachable AS all_nodes

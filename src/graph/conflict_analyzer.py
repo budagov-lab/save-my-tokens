@@ -1,6 +1,6 @@
 """Advanced conflict detection for parallel task execution."""
 
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set
 
 from loguru import logger
 

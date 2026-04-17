@@ -1,6 +1,6 @@
 """Detect breaking changes between function contracts."""
 
-from typing import List, Set
+from typing import List
 
 from loguru import logger
 

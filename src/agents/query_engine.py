@@ -3,25 +3,23 @@
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from src.config import settings
-from src.embeddings.embedding_service import EmbeddingService
-from src.graph.cycle_detector import detect_cycles
-from src.graph.compressor import compress_subgraph
-from src.graph.neo4j_client import Neo4jClient
-from src.graph.validator import validate_graph
-from src.parsers.symbol import Symbol
-from src.parsers.symbol_index import SymbolIndex
 from src.agents.models import (
-    DefinitionResult,
     ContextResult,
+    DefinitionResult,
     ImpactResult,
     SearchResult,
     StatusResult,
 )
+from src.embeddings.embedding_service import EmbeddingService
+from src.graph.compressor import compress_subgraph
+from src.graph.cycle_detector import detect_cycles
+from src.graph.neo4j_client import Neo4jClient
+from src.graph.validator import validate_graph
+from src.parsers.symbol_index import SymbolIndex
 
 
 class SMTQueryEngine:
@@ -125,7 +123,7 @@ class SMTQueryEngine:
     # Query methods
     # ------------------------------------------------------------------
 
-    def definition(self, symbol: str) -> DefinitionResult:
+    def definition(self, symbol: str, file_filter: Optional[str] = None) -> DefinitionResult:
         """Get definition of a symbol (1-hop, fast).
 
         Single Cypher round trip: finds the symbol and its callees together.
@@ -133,12 +131,14 @@ class SMTQueryEngine:
 
         Args:
             symbol: Symbol name to look up
+            file_filter: Optional file path substring to disambiguate when the same
+                name exists in multiple files (e.g. ``"graph_builder"``).
 
         Returns:
             DefinitionResult with name, labels, file, line, signature, docstring, callees.
             result.found is False if symbol not found.
         """
-        key = self._ck("definition", symbol)
+        key = self._ck("definition", symbol, file_filter=file_filter)
         cached = self._cache_get(key)
         if cached is not None:
             logger.debug(f"definition('{symbol}'): cache hit")
@@ -147,28 +147,33 @@ class SMTQueryEngine:
         try:
             pid = self.client.project_id
             params: Dict[str, Any] = {"name": symbol}
+            file_clause = ""
+            if file_filter:
+                params["file_filter"] = file_filter
+                file_clause = " AND n.file CONTAINS $file_filter"
 
             if pid:
                 params["pid"] = pid
-                query = """
-                MATCH (n {name: $name})
-                WHERE n.project_id = $pid
+                query = f"""
+                MATCH (n {{name: $name}})
+                WHERE n.project_id = $pid{file_clause}
                 WITH n, CASE WHEN n:Function THEN 0
                              WHEN n:Class    THEN 1
                              ELSE 2 END AS priority
                 ORDER BY priority LIMIT 1
-                OPTIONAL MATCH (n)-[:CALLS]->(callee {project_id: $pid})
-                RETURN n, collect({name: callee.name, file: callee.file}) AS callees
+                OPTIONAL MATCH (n)-[:CALLS]->(callee {{project_id: $pid}})
+                RETURN n, collect({{name: callee.name, file: callee.file}}) AS callees
                 """
             else:
-                query = """
-                MATCH (n {name: $name})
+                query = f"""
+                MATCH (n {{name: $name}})
+                WHERE true{file_clause}
                 WITH n, CASE WHEN n:Function THEN 0
                              WHEN n:Class    THEN 1
                              ELSE 2 END AS priority
                 ORDER BY priority LIMIT 1
                 OPTIONAL MATCH (n)-[:CALLS]->(callee)
-                RETURN n, collect({name: callee.name, file: callee.file}) AS callees
+                RETURN n, collect({{name: callee.name, file: callee.file}}) AS callees
                 """
 
             with self.client.driver.session() as session:
@@ -202,7 +207,7 @@ class SMTQueryEngine:
             return DefinitionResult.model_validate({"found": False, "symbol": symbol, "error": str(e)})
 
     def context(
-        self, symbol: str, depth: int = 2, compress: bool = False
+        self, symbol: str, depth: int = 2, compress: bool = False, file_filter: Optional[str] = None
     ) -> ContextResult:
         """Get working context for a symbol (bounded bidirectional).
 
@@ -212,19 +217,21 @@ class SMTQueryEngine:
             symbol: Symbol name to analyze
             depth: Max hop distance (1-10 recommended)
             compress: Remove bridge functions to save tokens
+            file_filter: Optional file path substring to disambiguate when the same
+                name exists in multiple files (e.g. ``"graph_builder"``).
 
         Returns:
             ContextResult with root, nodes, edges, cycles, and compression stats.
             result.found is False if symbol not found.
         """
-        key = self._ck("context", symbol, depth=depth, compress=compress)
+        key = self._ck("context", symbol, depth=depth, compress=compress, file_filter=file_filter)
         cached = self._cache_get(key)
         if cached is not None:
             logger.debug(f"context('{symbol}'): cache hit")
             return cached
 
         try:
-            subgraph = self.client.get_bounded_subgraph(symbol, max_depth=depth)
+            subgraph = self.client.get_bounded_subgraph(symbol, max_depth=depth, file_filter=file_filter)
             if not subgraph:
                 logger.debug(f"Symbol '{symbol}' not found in graph")
                 result = ContextResult(found=False, symbol=symbol)

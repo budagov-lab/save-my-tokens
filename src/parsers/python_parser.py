@@ -3,11 +3,11 @@
 from pathlib import Path
 from typing import List, Optional
 
-from tree_sitter import Language, Parser
+from tree_sitter import Parser
 
 from src.parsers.base_parser import BaseParser
-from src.parsers.symbol import Symbol
 from src.parsers.import_resolver import ImportResolver
+from src.parsers.symbol import Symbol
 
 # Load Tree-sitter Python grammar
 try:

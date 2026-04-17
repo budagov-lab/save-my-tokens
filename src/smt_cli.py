@@ -15,22 +15,21 @@ Usage:
     smt search <query>             # Semantic search
     smt sync [range]               # Sync graph after commits (default: HEAD~1..HEAD)
 
-    smt docker up                  # Start Neo4j container
-    smt docker down                # Stop Neo4j container
-    smt docker status              # Check Neo4j container
+    smt start                      # Start Neo4j container
+    smt stop                       # Stop Neo4j container
 
-    smt status                     # Graph health check
+    smt status                     # Graph health check (includes container state)
     smt setup [--dir <path>]       # Configure a project (.claude/settings.json)
 """
 
-import sys
-import json
-import hashlib
 import argparse
-import subprocess
+import hashlib
+import json
 import stat
+import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -131,11 +130,11 @@ def _get_services():
     """Lazy-import heavy services so CLI starts fast for docker/status commands."""
     sys.path.insert(0, str(SMT_DIR))
     from src.config import settings
-    from src.graph.neo4j_client import Neo4jClient
-    from src.graph.graph_builder import GraphBuilder
-    from src.parsers.symbol_index import SymbolIndex
     from src.embeddings.embedding_service import EmbeddingService
+    from src.graph.graph_builder import GraphBuilder
+    from src.graph.neo4j_client import Neo4jClient
     from src.incremental.updater import IncrementalSymbolUpdater
+    from src.parsers.symbol_index import SymbolIndex
     return settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, IncrementalSymbolUpdater
 
 
@@ -149,6 +148,93 @@ def _docker_compose_cmd() -> list:
     if result.returncode == 0:
         return ['docker', 'compose']
     return ['docker-compose']
+
+
+_CONFIG_KEYS = {
+    'SMT_NEO4J_HEAP_INIT': ('256m', 'Neo4j JVM heap initial size  (e.g. 256m, 512m, 1g)'),
+    'SMT_NEO4J_HEAP_MAX':  ('512m', 'Neo4j JVM heap max size       (e.g. 512m, 1g, 2g)'),
+    'SMT_NEO4J_PAGECACHE': ('256m', 'Neo4j page-cache size         (e.g. 256m, 512m, 1g)'),
+    'NEO4J_PASSWORD':      ('password', 'Neo4j auth password'),
+    'NEO4J_URI':           ('bolt://localhost:7687', 'Neo4j bolt URI'),
+}
+
+
+def _read_env() -> dict:
+    env_file = SMT_DIR / '.env'
+    result: dict = {}
+    if env_file.exists():
+        for line in env_file.read_text(encoding='utf-8').splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, _, v = line.partition('=')
+                result[k.strip()] = v.strip()
+    return result
+
+
+def _write_env_key(key: str, value: str) -> None:
+    env_file = SMT_DIR / '.env'
+    lines = env_file.read_text(encoding='utf-8').splitlines() if env_file.exists() else []
+    updated = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f'{key}=') or stripped == key:
+            new_lines.append(f'{key}={value}')
+            updated = True
+        else:
+            new_lines.append(line)
+    if not updated:
+        new_lines.append(f'{key}={value}')
+    env_file.write_text('\n'.join(new_lines) + '\n', encoding='utf-8')
+
+
+def cmd_config(action: Optional[str], key: Optional[str], value: Optional[str]) -> int:
+    env = _read_env()
+
+    if action is None:
+        # Show all configurable keys
+        print(f"\n{'KEY':<30} {'CURRENT':<20} {'DEFAULT':<20} DESCRIPTION")
+        print('-' * 95)
+        for k, (default, desc) in _CONFIG_KEYS.items():
+            current = env.get(k, '')
+            display = current if current else f'(default: {default})'
+            print(f"  {k:<28} {display:<20} {default:<20} {desc}")
+        print()
+        print("To change a setting:")
+        print("  smt config set SMT_NEO4J_HEAP_MAX 1g")
+        print("  smt config set SMT_NEO4J_PAGECACHE 512m")
+        print()
+        print("After changing Neo4j memory, restart the container:")
+        print("  smt stop && smt start")
+        return 0
+
+    if action == 'set':
+        if not key or value is None:
+            print("Usage: smt config set <KEY> <VALUE>")
+            print("Example: smt config set SMT_NEO4J_HEAP_MAX 1g")
+            return 1
+        key = key.upper()
+        if key not in _CONFIG_KEYS:
+            known = ', '.join(_CONFIG_KEYS)
+            print(f"Unknown key '{key}'. Configurable keys: {known}")
+            return 1
+        _write_env_key(key, value)
+        _, desc = _CONFIG_KEYS[key]
+        print(f"Set {key}={value}  ({desc})")
+        if key.startswith('SMT_NEO4J_'):
+            print("Restart Neo4j for the change to take effect:  smt stop && smt start")
+        return 0
+
+    if action == 'reset':
+        for k, (default, _) in _CONFIG_KEYS.items():
+            if k in _read_env():
+                _write_env_key(k, default)
+        print("Reset all SMT config keys to defaults.")
+        print("Restart Neo4j:  smt stop && smt start")
+        return 0
+
+    print(f"Unknown config action '{action}'. Use: smt config | smt config set KEY VALUE | smt config reset")
+    return 1
 
 
 def _neo4j_bolt_ready(timeout: float = 2.0) -> bool:
@@ -182,7 +268,7 @@ def cmd_docker(action: str) -> int:
             stderr = result.stderr or ""
             if "pipe/dockerDesktopLinuxEngine" in stderr or "pipe/docker_engine" in stderr or "connect: no such file" in stderr:
                 print("ERROR: Docker Desktop is not running.")
-                print("  Fix: start Docker Desktop, then re-run: smt docker up")
+                print("  Fix: start Docker Desktop, then re-run: smt start")
             else:
                 if result.stdout:
                     print(result.stdout, end="")
@@ -200,8 +286,17 @@ def cmd_docker(action: str) -> int:
         elapsed = 0.0
         attempt = 0
         while elapsed < max_wait:
+            # Check container is still running before declaring success
+            check = subprocess.run(
+                dc + ['-f', str(compose_file), 'ps', '--status', 'running', '-q', 'neo4j'],
+                cwd=SMT_DIR, capture_output=True, text=True,
+            )
+            if check.returncode != 0 or not check.stdout.strip():
+                print("ERROR: Neo4j container stopped unexpectedly.")
+                print("  Check logs: docker logs save-my-tokens-neo4j")
+                return 1
             if _neo4j_bolt_ready():
-                print(f"Neo4j ready (bolt://localhost:7687) — run: smt build")
+                print("Neo4j ready (bolt://localhost:7687) — run: smt build")
                 return 0
             attempt += 1
             wait = min(0.5 * (2 ** (attempt - 1)), 8)
@@ -229,6 +324,20 @@ def cmd_docker(action: str) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_status() -> int:
+    # Container state via docker compose
+    compose_file = SMT_DIR / 'docker-compose.yml'
+    dc = _docker_compose_cmd()
+    try:
+        ps = subprocess.run(
+            dc + ['-f', str(compose_file), 'ps', '--status', 'running', '-q', 'neo4j'],
+            cwd=SMT_DIR, capture_output=True, text=True,
+        )
+        container_running = bool(ps.stdout.strip())
+    except Exception:
+        container_running = False
+    print(f"Container:  {'running' if container_running else 'stopped'}")
+
+    # Neo4j reachability
     try:
         import urllib.request
         urllib.request.urlopen('http://localhost:7474', timeout=2)
@@ -239,7 +348,7 @@ def cmd_status() -> int:
     print(f"Neo4j:  {'OK  (http://localhost:7474)' if neo4j_ok else 'NOT RUNNING'}")
 
     if not neo4j_ok:
-        print("\nStart Neo4j with:  smt docker up")
+        print("\nStart Neo4j with:  smt start")
         return 1
 
     try:
@@ -274,7 +383,11 @@ def cmd_status() -> int:
 
         # Freshness check
         try:
-            from src.graph.validator import validate_graph, format_validation_line, format_stale_files_line
+            from src.graph.validator import (
+                format_stale_files_line,
+                format_validation_line,
+                validate_graph,
+            )
             validation = validate_graph(client, project_path)
             print(f"Head:   {format_validation_line(validation)}")
             stale = format_stale_files_line(validation)
@@ -429,8 +542,8 @@ def _get_default_depth(fallback: int) -> int:
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
                 file_filter: str | None = None, compress: bool = False) -> int:
-    from src.graph.cycle_detector import detect_cycles
     from src.graph.compressor import compress_subgraph, format_compression_stats
+    from src.graph.cycle_detector import detect_cycles
 
     project_path = _resolve_project_path()
     if not _require_git(project_path):
@@ -441,7 +554,7 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
 
         # Get bounded subgraph using depth parameter (clamped — 0 breaks Cypher, >10 kills DB)
         max_depth = max(1, min(depth, 10))
-        subgraph = client.get_bounded_subgraph(symbol, max_depth=max_depth)
+        subgraph = client.get_bounded_subgraph(symbol, max_depth=max_depth, file_filter=file_filter)
 
         if not subgraph:
             print(f"Symbol '{symbol}' not found in graph.")
@@ -489,11 +602,13 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         cyclic_nodes_set = {n for cg in cycle_groups for n in cg.members}
 
         # Print calls (outbound edges, excluding those in cycles)
-        outbound_calls = [e for e in edges if e["src"] == symbol]
+        # Use edge_tuples (always canonical tuple form) — edges may be dicts or tuples
+        # depending on whether compression was applied.
+        outbound_calls = [e for e in edge_tuples if e[0] == symbol]
         if outbound_calls:
             print(f"\n  calls ({len(outbound_calls)}):")
             for edge in outbound_calls:
-                target = edge["dst"]
+                target = edge[1]
                 # Find target node for file info
                 target_node = next((n for n in nodes if n["name"] == target), None)
                 file_str = target_node.get("file", "?") if target_node else "?"
@@ -539,7 +654,7 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         # Print validation status
         try:
             validation = _get_validation(_resolve_project_path())
-            from src.graph.validator import format_validation_line, format_stale_files_line
+            from src.graph.validator import format_stale_files_line, format_validation_line
             print(f"  {format_validation_line(validation)}")
             stale = format_stale_files_line(validation)
             if stale:
@@ -646,7 +761,7 @@ def cmd_definition(symbol: str, file_filter: str | None = None) -> int:
             # Print validation status
             try:
                 validation = _get_validation(_resolve_project_path())
-                from src.graph.validator import format_validation_line, format_stale_files_line
+                from src.graph.validator import format_stale_files_line, format_validation_line
                 print(f"\n  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
@@ -706,8 +821,8 @@ def _compute_depths(
 
 def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
     """Impact analysis — what breaks if I change this symbol?"""
-    from src.graph.cycle_detector import detect_cycles
     from src.graph.compressor import compress_subgraph, format_compression_stats
+    from src.graph.cycle_detector import detect_cycles
 
     project_path = _resolve_project_path()
     if not _require_git(project_path):
@@ -817,7 +932,7 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
         # Print validation status
         try:
             validation = _get_validation(_resolve_project_path())
-            from src.graph.validator import format_validation_line, format_stale_files_line
+            from src.graph.validator import format_stale_files_line, format_validation_line
             print(f"  {format_validation_line(validation)}")
             stale = format_stale_files_line(validation)
             if stale:
@@ -938,7 +1053,7 @@ def cmd_explain(symbol: str, depth: int = 2) -> int:
     edges = subgraph.get("edges", [])
 
     print(f"# Context: {symbol}")
-    print(f"# (paste this to Claude and ask it to explain)")
+    print("# (paste this to Claude and ask it to explain)")
     print()
     print(f"Symbol : {root.get('name')}  ({root.get('type')})")
     print(f"File   : {root.get('file')}:{root.get('line')}")
@@ -947,17 +1062,12 @@ def cmd_explain(symbol: str, depth: int = 2) -> int:
     print()
     print(f"Graph  : {len(nodes)} nodes, {len(edges)} edges (depth={depth})")
     for edge in edges:
-        src = edge.get('source', {}).get('name', '?')
-        tgt = edge.get('target', {}).get('name', '?')
-        rel = edge.get('type', 'CALLS')
-        src_file = edge.get('source', {}).get('file', '')
-        tgt_file = edge.get('target', {}).get('file', '')
-        src_label = f"{src} ({src_file.split('/')[-1]})" if src_file else src
-        tgt_label = f"{tgt} ({tgt_file.split('/')[-1]})" if tgt_file else tgt
-        print(f"  {src_label} --[{rel}]--> {tgt_label}")
+        src = edge.get('src', '?')
+        tgt = edge.get('dst', '?')
+        print(f"  {src} --[CALLS]--> {tgt}")
     print()
     print(f"Prompt : Explain what '{symbol}' does, its role in the architecture,")
-    print(f"         and what to be aware of before modifying it.")
+    print("         and what to be aware of before modifying it.")
     return 0
 
 
@@ -1010,7 +1120,7 @@ def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
             return 1
 
     except Exception as e:
-        logger.debug(f"cmd_sync error", exc_info=True)
+        logger.debug("cmd_sync error", exc_info=True)
         print(f"ERROR: {e}")
         return 1
 
@@ -1029,8 +1139,8 @@ def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
     refresh edge relationships after large refactors.
     """
     try:
-        from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
+        from watchdog.observers import Observer
     except ImportError:
         print("ERROR: watchdog is not installed. Run:  pip install watchdog")
         return 1
@@ -1096,6 +1206,7 @@ def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
                 print(f"  {p.name}: ERROR — {e}", flush=True)
         if updated:
             print(f"[watch] Done. ({updated}/{len(files)} files updated)", flush=True)
+        print("[watch] Note: CALLS edges not updated — run `smt build` to refresh call relationships.", flush=True)
 
     def _schedule_flush() -> None:
         nonlocal _timer
@@ -1206,7 +1317,7 @@ _A2A_AGENT_CARD = {
     ),
     "url": "local://smt-cli",
     "version": "1.0.0",
-    "onboard": "cat .claude/a2a/smt-onboard.md",
+    "onboard": "cat .claude/skills/smt-analysis/a2a-onboard.md",
     "capabilities": {
         "streaming": False,
         "pushNotifications": False,
@@ -1246,7 +1357,7 @@ _A2A_AGENT_CARD = {
         {
             "id": "smt-analysis",
             "name": "Multi-Agent Analysis Harness",
-            "description": "Scout + Fabler + PathFinder for deep impact/isolation analysis.",
+            "description": "Single-agent pipeline: pre-flight → query → reason → report. Use for impact analysis, isolation analysis, or architecture audits.",
             "invoke": "/smt-analysis",
         },
         {
@@ -1381,7 +1492,7 @@ What breaks if I change this  | smt impact <symbol>
 Check graph health            | smt status
 Build graph from source       | smt build
 Sync after recent commits     | smt sync HEAD~1..HEAD
-Start Neo4j                   | smt docker up
+Start Neo4j                   | smt start
 
 {_C.BOLD}TOOL HIERARCHY (use in order){_C.RESET}
   Tier 1 (first)   — smt context / smt search / smt impact
@@ -1414,7 +1525,7 @@ Start Neo4j                   | smt docker up
             _ok("Neo4j reachable (http://localhost:7474)")
             neo4j_up = True
         except Exception:
-            _fail("Neo4j not reachable — run: smt docker up")
+            _fail("Neo4j not reachable — run: smt start")
             neo4j_up = False
             exit_code = 1
 
@@ -1615,7 +1726,7 @@ smt status                      # check graph health
 ### Session start
 
 ```bash
-smt docker up   # if Neo4j isn't running
+smt start   # if Neo4j isn't running
 smt status      # is the graph ready? (node count > 0)
 smt build       # build if empty
 smt sync        # sync if stale after recent commits
@@ -1692,10 +1803,10 @@ Neo4j browser: http://localhost:7474
     except Exception as e:
         print(f"Warning: Failed to setup git hook: {e}")
 
-    print(f"\nSetup complete! Graph is synced with git.")
-    print(f"  Every git commit will now auto-update the graph via post-commit hook.")
-    print(f"  Manual sync: smt sync")
-    print(f"  Graph status: smt status")
+    print("\nSetup complete! Graph is synced with git.")
+    print("  Every git commit will now auto-update the graph via post-commit hook.")
+    print("  Manual sync: smt sync")
+    print("  Graph status: smt status")
 
     return 0
 
@@ -1720,7 +1831,7 @@ def cmd_setup_hooks(target_dir: Path) -> bool:
 
     hooks_dir = git_dir / 'hooks'
     if not hooks_dir.exists():
-        logger.debug(f"Creating .git/hooks directory")
+        logger.debug("Creating .git/hooks directory")
         hooks_dir.mkdir(parents=True, exist_ok=True)
 
     hook_file = hooks_dir / 'post-commit'
@@ -1757,7 +1868,7 @@ exit 0
     hook_file.chmod(st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
     logger.info(f"Installed post-commit hook at {hook_file}")
-    print(f"  .git/hooks/post-commit [OK] — Graph will sync after each commit")
+    print("  .git/hooks/post-commit [OK] — Graph will sync after each commit")
     return True
 
 
@@ -2393,7 +2504,7 @@ def cmd_complexity(limit: int = 20) -> int:
                 f"{row['fan_in']:>4}  {row['fan_out']:>4}  {row['score']:>6}  {file_display}"
             )
 
-        print(f"\nScore = callers × callees.  High score = hard to refactor + large blast radius.")
+        print("\nScore = callers × callees.  High score = hard to refactor + large blast radius.")
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -2596,8 +2707,8 @@ def cmd_bottleneck(limit: int = 10) -> int:
             if caller_files and callee_files:
                 print(f"    {', '.join(caller_files)} --> [this] --> {', '.join(callee_files)}")
 
-        print(f"\nScore = (distinct caller files) × (distinct callee files) via cross-file edges.")
-        print(f"High score = structural bridge. Refactoring these requires coordinating across files.")
+        print("\nScore = (distinct caller files) × (distinct callee files) via cross-file edges.")
+        print("High score = structural bridge. Refactoring these requires coordinating across files.")
         return 0
     except Exception as e:
         print(f"ERROR: {e}")
@@ -2647,7 +2758,7 @@ def cmd_layer(config_path: str | None = None) -> int:
         with open(cfg_file, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=2)
         print(f"Created default layer config: {cfg_file}")
-        print(f"Edit it to match your project layout, then re-run.\n")
+        print("Edit it to match your project layout, then re-run.\n")
 
     layers = cfg.get('layers', [])
     if not layers:
@@ -2722,7 +2833,7 @@ def cmd_layer(config_path: str | None = None) -> int:
                     violations.append(entry)
 
         # Print layer definition
-        print(f"\nLayer stack (index 0 = top, can call downward only):\n")
+        print("\nLayer stack (index 0 = top, can call downward only):\n")
         for i, layer in enumerate(layers):
             print(f"  [{i}] {layer['name']:<12} — {', '.join(layer['paths'])}")
 
@@ -2785,8 +2896,8 @@ def cmd_breaking_changes(
     Reads the symbol's source at both refs using `git show`, extracts contracts
     via AST analysis, and classifies parameter/return-type/exception changes.
     """
-    from src.contracts.extractor import ContractExtractor
     from src.contracts.breaking_change_detector import BreakingChangeDetector
+    from src.contracts.extractor import ContractExtractor
     from src.parsers.symbol import Symbol as SymbolObj
 
     project_path = _resolve_project_path()
@@ -2805,7 +2916,7 @@ def cmd_breaking_changes(
         with client.driver.session() as session:
             row = session.run(
                 f"MATCH (n {{name: $name}}) WHERE n:Function {pid_filter} "
-                "RETURN n.file AS file, n.line AS line LIMIT 1",
+                "RETURN n.file AS file, n.line AS line, n.parent AS parent LIMIT 1",
                 **params,
             ).single()
     except Exception as e:
@@ -2814,7 +2925,7 @@ def cmd_breaking_changes(
 
     if not row:
         print(f"Symbol '{symbol}' not found in graph (Functions only).")
-        print(f"Hint: run `smt build` or `smt sync` to refresh the graph.")
+        print("Hint: run `smt build` or `smt sync` to refresh the graph.")
         return 1
 
     file_path: str = row["file"]
@@ -2842,19 +2953,20 @@ def cmd_breaking_changes(
         print(f"ERROR: {e}")
         return 1
 
-    sym_before = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0)
-    sym_after  = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0)
+    parent_class = row.get("parent")
+    sym_before = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0, parent=parent_class)
+    sym_after  = SymbolObj(name=symbol, type="function", file=file_path, line=line, column=0, parent=parent_class)
 
     before_contract = ContractExtractor(before_src).extract_function_contract(sym_before)
     after_contract  = ContractExtractor(after_src).extract_function_contract(sym_after)
 
     if not before_contract:
         print(f"Could not extract contract for '{symbol}' at {before_ref}.")
-        print(f"  (function may not be top-level, or file may not be Python)")
+        print("  (function may not be top-level, or file may not be Python)")
         return 1
     if not after_contract:
         print(f"Could not extract contract for '{symbol}' at {after_ref}.")
-        print(f"  (function may not be top-level, or file may not be Python)")
+        print("  (function may not be top-level, or file may not be Python)")
         return 1
 
     comparison = BreakingChangeDetector().detect_breaking_changes(before_contract, after_contract)
@@ -2915,8 +3027,9 @@ commands:
   watch [--debounce N]   Auto-sync graph when files change (live mode)
   explain <symbol>       Print symbol context formatted for Claude to explain
   hooks install|uninstall Auto-sync hooks for git commits
-  docker up|down|status  Manage Neo4j container
-  status                 Graph health check
+  start                  Start Neo4j container
+  stop                   Stop Neo4j container
+  status                 Graph health check (includes container state)
   setup [--dir <path>]   Configure a project
   onboard project|agent|check Guided setup and orientation
 
@@ -2993,12 +3106,19 @@ advanced analysis:
     p_explain.add_argument('symbol')
     p_explain.add_argument('--depth', type=int, default=2, help='Context graph depth (default: 2)')
 
-    # docker
-    p_docker = sub.add_parser('docker', help='Manage Neo4j container')
-    p_docker.add_argument('action', choices=['up', 'down', 'status'])
+    # config
+    p_config = sub.add_parser('config', help='Show or change SMT settings (memory, passwords)')
+    p_config.add_argument('action', nargs='?', choices=['set', 'reset'], default=None,
+                          help='set=write a value, reset=restore defaults, omit=show all')
+    p_config.add_argument('key', nargs='?', default=None, help='Config key (e.g. SMT_NEO4J_HEAP_MAX)')
+    p_config.add_argument('value', nargs='?', default=None, help='New value (e.g. 1g)')
+
+    # start / stop
+    sub.add_parser('start', help='Start Neo4j container')
+    sub.add_parser('stop', help='Stop Neo4j container')
 
     # status
-    sub.add_parser('status', help='Graph health check')
+    sub.add_parser('status', help='Graph health check (includes container state)')
 
     # setup
     p_setup = sub.add_parser('setup', help='Configure a project')
@@ -3122,8 +3242,12 @@ advanced analysis:
         return cmd_watch(target_dir=args.dir, debounce=args.debounce)
     elif args.command == 'explain':
         return cmd_explain(args.symbol, depth=args.depth)
-    elif args.command == 'docker':
-        return cmd_docker(args.action)
+    elif args.command == 'config':
+        return cmd_config(args.action, getattr(args, 'key', None), getattr(args, 'value', None))
+    elif args.command == 'start':
+        return cmd_docker('up')
+    elif args.command == 'stop':
+        return cmd_docker('down')
     elif args.command == 'status':
         return cmd_status()
     elif args.command == 'setup':

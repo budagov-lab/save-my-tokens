@@ -1,6 +1,6 @@
 """In-memory symbol index for fast lookups."""
 
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from src.parsers.symbol import Symbol
 

@@ -1,7 +1,7 @@
 """Resolve and normalize import statements across Python and TypeScript."""
 
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 
 class ImportResolver:

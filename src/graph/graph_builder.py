@@ -4,14 +4,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
 from src.graph.call_analyzer import CallAnalyzer
 from src.graph.neo4j_client import Neo4jClient
 from src.graph.node_types import Edge, EdgeType, Node, NodeType
 from src.parsers.import_resolver import ImportResolver
 from src.parsers.python_parser import PythonParser
-from src.parsers.symbol import Symbol
 from src.parsers.symbol_index import SymbolIndex
 from src.smtignore import SMTIgnore
 

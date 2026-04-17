@@ -6,12 +6,12 @@ from typing import List, Optional
 from tree_sitter import Language, Parser
 
 from src.parsers.base_parser import BaseParser
-from src.parsers.symbol import Symbol
 from src.parsers.import_resolver import ImportResolver
+from src.parsers.symbol import Symbol
 
 # Load Tree-sitter TypeScript grammar
 try:
-    from tree_sitter_typescript import language_typescript, language_tsx
+    from tree_sitter_typescript import language_tsx, language_typescript
     TYPESCRIPT_LANGUAGE = Language(language_typescript())
     TSX_LANGUAGE = Language(language_tsx())
 except ImportError:

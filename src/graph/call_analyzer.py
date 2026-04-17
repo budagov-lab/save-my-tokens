@@ -1,10 +1,9 @@
 """Static analysis for detecting function calls in code."""
 
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 from tree_sitter import Node as TSNode
 
-from src.parsers.symbol import Symbol
 from src.parsers.symbol_index import SymbolIndex
 
 

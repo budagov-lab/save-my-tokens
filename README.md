@@ -144,7 +144,7 @@ smt build --clear
 smt status
 
 # Manage Neo4j
-smt docker up | down | status
+smt start | stop
 
 # Configure a project (writes .claude/settings.json with hooks)
 smt setup [--dir PATH]
@@ -168,7 +168,8 @@ smt search QUERY               Semantic search by meaning
 smt sync [RANGE]               Incremental sync (default: HEAD~1..HEAD)
 smt status                     Graph health check
 
-smt docker up|down|status      Manage Neo4j container
+smt start                      Start Neo4j container
+smt stop                       Stop Neo4j container
 smt setup [--dir PATH]         Configure project hooks
 ```
 

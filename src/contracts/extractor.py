@@ -1,8 +1,7 @@
 """Extract function contracts from Python source code."""
 
 import ast
-import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from loguru import logger
 
