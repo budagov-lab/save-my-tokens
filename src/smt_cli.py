@@ -909,17 +909,6 @@ def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
 
         from loguru import logger
 
-        # Guard: if the default range uses HEAD~1 but the repo has only one commit, nothing to sync.
-        if commit_range == 'HEAD~1..HEAD':
-            count_result = subprocess.run(
-                ['git', 'rev-list', '--count', 'HEAD'],
-                cwd=str(target_path), capture_output=True, text=True,
-            )
-            if count_result.returncode == 0 and count_result.stdout.strip() == '1':
-                print("Nothing to sync — repository has only one commit.")
-                print("  If the graph is empty, run: smt build")
-                return 0
-
         project_id = _get_project_id(target_path)
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, project_id=project_id)
 
@@ -934,6 +923,23 @@ def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
             embedding_service=embedding_svc,
             base_path=str(target_path),
         )
+
+        # Guard: single-commit repo — nothing to diff, but record HEAD so validator shows fresh.
+        if commit_range == 'HEAD~1..HEAD':
+            count_result = subprocess.run(
+                ['git', 'rev-list', '--count', 'HEAD'],
+                cwd=str(target_path), capture_output=True, text=True,
+            )
+            if count_result.returncode == 0 and count_result.stdout.strip() == '1':
+                try:
+                    commit_meta = updater._get_commit_metadata('HEAD', str(target_path))
+                    client.create_commit_node(commit_meta)
+                    print("✓ Graph marked fresh (single-commit repository)")
+                except Exception as e:
+                    logger.warning(f"Could not record HEAD commit: {e}")
+                    print("Nothing to sync — repository has only one commit.")
+                client.driver.close()
+                return cmd_status()
 
         success = updater.update_from_git(commit_range, repo_path=str(target_path))
         client.driver.close()
