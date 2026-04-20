@@ -315,6 +315,19 @@ def step_setup_venv() -> bool:
 
     print_pass("Virtual environment ready")
 
+    # --- Create bash-compatible smt shim (alongside smt.bat for Git Bash / WSL) ---
+    smt_bash = project_dir / 'smt'
+    smt_bash_content = (
+        "#!/usr/bin/env bash\n"
+        'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        'exec "$SCRIPT_DIR/venv/Scripts/python.exe" "$SCRIPT_DIR/src/smt_cli.py" "$@"\n'
+    )
+    smt_bash.write_text(smt_bash_content)
+    try:
+        smt_bash.chmod(0o755)
+    except Exception:
+        pass
+
     # --- Self-reinvoke inside the new venv — no manual activation needed ---
     print("\n  Restarting setup inside virtual environment...\n", flush=True)
     sys.stdout.flush()
