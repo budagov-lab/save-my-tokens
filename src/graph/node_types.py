@@ -41,6 +41,7 @@ class Node:
     file: str
     line: int
     column: int
+    end_line: Optional[int] = None
     docstring: Optional[str] = None
     parent: Optional[str] = None
     metadata: Optional[Dict[str, str]] = None
@@ -57,13 +58,14 @@ class Node:
             "column": self.column,
             "project_id": self.project_id,
         }
+        if self.end_line is not None:
+            props["end_line"] = self.end_line
         if self.docstring:
             props["docstring"] = self.docstring
         if self.parent:
             props["parent"] = self.parent
         if self.metadata:
-            # Exclude keys that would silently overwrite core identity properties.
-            _protected = {"node_id", "project_id", "name", "type", "file", "line", "column"}
+            _protected = {"node_id", "project_id", "name", "type", "file", "line", "end_line", "column"}
             props.update({k: v for k, v in self.metadata.items() if k not in _protected})
         return props
 

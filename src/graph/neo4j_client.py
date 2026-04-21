@@ -332,7 +332,7 @@ class Neo4jClient:
             WITH start,
                  [n IN all_nodes | {{
                      node_id: n.node_id, name: n.name, file: n.file, line: n.line,
-                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                     end_line: n.end_line, labels: labels(n), is_root: (n.node_id = start.node_id)
                  }}] AS node_rows,
                  all_nodes
             UNWIND all_nodes AS a
@@ -354,7 +354,7 @@ class Neo4jClient:
             WITH start,
                  [n IN all_nodes | {{
                      node_id: n.node_id, name: n.name, file: n.file, line: n.line,
-                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                     end_line: n.end_line, labels: labels(n), is_root: (n.node_id = start.node_id)
                  }}] AS node_rows,
                  all_nodes
             UNWIND all_nodes AS a
@@ -429,7 +429,7 @@ class Neo4jClient:
             WITH start,
                  [n IN all_nodes | {{
                      node_id: n.node_id, name: n.name, file: n.file, line: n.line,
-                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                     end_line: n.end_line, labels: labels(n), is_root: (n.node_id = start.node_id)
                  }}] AS node_rows,
                  all_nodes
             UNWIND all_nodes AS a
@@ -450,7 +450,7 @@ class Neo4jClient:
             WITH start,
                  [n IN all_nodes | {{
                      node_id: n.node_id, name: n.name, file: n.file, line: n.line,
-                     labels: labels(n), is_root: (n.node_id = start.node_id)
+                     end_line: n.end_line, labels: labels(n), is_root: (n.node_id = start.node_id)
                  }}] AS node_rows,
                  all_nodes
             UNWIND all_nodes AS a

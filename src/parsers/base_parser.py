@@ -120,6 +120,7 @@ class BaseParser(ABC):
             file=file_path,
             line=node.start_point[0] + 1,
             column=node.start_point[1],
+            end_line=node.end_point[0] + 1,
             docstring=docstring,
             parent=parent,
         )

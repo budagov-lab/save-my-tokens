@@ -1,0 +1,242 @@
+"""Shared state and utilities for SMT CLI sub-modules."""
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+from loguru import logger
+
+# Repo root: src/cli/_helpers.py → src/cli/ → src/ → repo root
+SMT_DIR = Path(__file__).parent.parent.parent.resolve()
+
+if str(SMT_DIR) not in sys.path:
+    sys.path.insert(0, str(SMT_DIR))
+
+from cli_utils import Colors
+
+_C = Colors
+
+# ---------------------------------------------------------------------------
+# Global state (connection pooling)
+# ---------------------------------------------------------------------------
+
+_neo4j_client: Optional[Any] = None
+_validation_cache: Optional[Any] = None
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+def _ok(msg: str) -> None:
+    print(f"{Colors.GREEN}[OK]{Colors.RESET}   {msg}")
+
+
+def _fail(msg: str) -> None:
+    print(f"{Colors.RED}[FAIL]{Colors.RESET} {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {msg}")
+
+
+# ---------------------------------------------------------------------------
+# Project identity
+# ---------------------------------------------------------------------------
+
+def _get_project_id(project_root: Path) -> str:
+    """Derive a stable 12-char project ID from the project root path."""
+    return hashlib.sha256(str(project_root.resolve()).encode()).hexdigest()[:12]
+
+
+# ---------------------------------------------------------------------------
+# Neo4j connection pooling
+# ---------------------------------------------------------------------------
+
+def _get_neo4j_client(project_id: str = "") -> Any:
+    """Get or create singleton Neo4j client (connection pooling).
+
+    Re-creates the client if project_id has changed so queries never run
+    against the wrong project's data.
+    """
+    global _neo4j_client
+    if _neo4j_client is None or _neo4j_client.project_id != project_id:
+        _close_neo4j_client()
+        from src.config import settings
+        from src.graph.neo4j_client import Neo4jClient
+        _neo4j_client = Neo4jClient(
+            settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD,
+            project_id=project_id,
+        )
+    return _neo4j_client
+
+
+def _close_neo4j_client() -> None:
+    """Close the global client on exit."""
+    global _neo4j_client
+    if _neo4j_client:
+        _neo4j_client.driver.close()
+        _neo4j_client = None
+
+
+# ---------------------------------------------------------------------------
+# SMTQueryEngine (for --json output)
+# ---------------------------------------------------------------------------
+
+def _get_engine(project_path: Optional[Path] = None) -> Any:
+    """Return an SMTQueryEngine scoped to the current project."""
+    from src.agents.query_engine import SMTQueryEngine
+    from src.config import settings
+    path = (project_path or _resolve_project_path()).resolve()
+    project_id = _get_project_id(path)
+    cache_dir = path / '.smt' / 'embeddings'
+    return SMTQueryEngine(
+        neo4j_uri=settings.NEO4J_URI,
+        neo4j_user=settings.NEO4J_USER,
+        neo4j_password=settings.NEO4J_PASSWORD,
+        embeddings_cache_dir=cache_dir,
+        project_id=project_id,
+    )
+
+
+def _get_validation(repo_path: Path) -> Any:
+    """Get or create cached validation result."""
+    global _validation_cache
+    if _validation_cache is None:
+        from src.graph.validator import validate_graph
+        project_id = _get_project_id(repo_path)
+        client = _get_neo4j_client(project_id)
+        _validation_cache = validate_graph(client, repo_path)
+    return _validation_cache
+
+
+def _get_services() -> Any:
+    """Lazy-import heavy services so CLI starts fast for docker/status commands."""
+    sys.path.insert(0, str(SMT_DIR))
+    from src.config import settings
+    from src.embeddings.embedding_service import EmbeddingService
+    from src.graph.graph_builder import GraphBuilder
+    from src.graph.neo4j_client import Neo4jClient
+    from src.incremental.updater import IncrementalSymbolUpdater
+    from src.parsers.symbol_index import SymbolIndex
+    return settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, IncrementalSymbolUpdater
+
+
+# ---------------------------------------------------------------------------
+# Project path resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_project_path() -> Path:
+    """Resolve project path from .smt_config or cwd."""
+    cwd = Path.cwd()
+    smt_config_file = cwd / '.claude' / '.smt_config'
+    if smt_config_file.exists():
+        try:
+            with open(smt_config_file, 'r', encoding='utf-8') as f:
+                smt_config = json.load(f)
+                return Path(smt_config['project_dir']).resolve()
+        except (json.JSONDecodeError, KeyError, FileNotFoundError):
+            pass
+    return cwd
+
+
+def _get_default_depth(fallback: int) -> int:
+    """Return the configured default query depth, falling back to the hardcoded default.
+
+    Reads ``default_depth`` from .claude/.smt_config (set by ``smt setup`` or edited manually).
+    Per-invocation ``--depth N`` always takes precedence — this only fills in the default.
+    """
+    try:
+        cfg_file = Path.cwd() / '.claude' / '.smt_config'
+        if cfg_file.exists():
+            with open(cfg_file, 'r', encoding='utf-8') as f:
+                val = json.load(f).get('default_depth')
+            if isinstance(val, int) and 1 <= val <= 10:
+                return val
+    except Exception:
+        pass
+    return fallback
+
+
+# ---------------------------------------------------------------------------
+# .smtignore
+# ---------------------------------------------------------------------------
+
+_SMTIGNORE_TEMPLATE = """\
+# .smtignore — files and directories excluded from smt build and smt watch
+# Syntax:
+#   simple name  →  matches any path component  (e.g. vendor)
+#   path/pattern →  matched against relative path from project root
+#   *.glob       →  fnmatch glob against filename
+#
+# Default skip dirs are always applied (node_modules, .venv, __pycache__, …)
+# Add project-specific overrides below:
+
+# tests/fixtures
+# vendor
+# *.generated.py
+"""
+
+
+def _ensure_smtignore(project_root: Path) -> None:
+    """Create a .smtignore in project_root if one doesn't exist yet."""
+    smtignore = project_root / '.smtignore'
+    if not smtignore.exists():
+        smtignore.write_text(_SMTIGNORE_TEMPLATE, encoding='utf-8')
+        print(f"  .smtignore created in {project_root}")
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def _require_git(path: Path) -> bool:
+    """Check that path is a git repository. Prints error if not."""
+    if not (path / '.git').exists():
+        print(f"ERROR: {path} is not a git repository.")
+        print(f"  Run: smt setup --dir {path}")
+        return False
+    return True
+
+
+def _git_initial_commit(target_dir: Path) -> None:
+    """Anchor current project state in git history."""
+    def _git_config_missing(key: str) -> bool:
+        result = subprocess.run(
+            ['git', 'config', key], cwd=target_dir, capture_output=True
+        )
+        return result.returncode != 0 or not result.stdout.strip()
+
+    if _git_config_missing('user.name'):
+        subprocess.run(['git', 'config', 'user.name', 'SMT'], cwd=target_dir, capture_output=True)
+    if _git_config_missing('user.email'):
+        subprocess.run(['git', 'config', 'user.email', 'smt@local'], cwd=target_dir, capture_output=True)
+
+    result = subprocess.run(
+        ['git', 'log', '--oneline', '-1'],
+        cwd=target_dir, capture_output=True
+    )
+    has_commits = result.returncode == 0 and result.stdout.strip()
+
+    if has_commits:
+        subprocess.run(['git', 'add', '.claude/'], cwd=target_dir, capture_output=True)
+        staged = subprocess.run(
+            ['git', 'diff', '--cached', '--name-only'],
+            cwd=target_dir, capture_output=True
+        )
+        if staged.stdout.strip():
+            subprocess.run(
+                ['git', 'commit', '-m', 'chore: Initialize SMT graph index'],
+                cwd=target_dir, capture_output=True
+            )
+    else:
+        subprocess.run(['git', 'add', '.'], cwd=target_dir, capture_output=True)
+        subprocess.run(
+            ['git', 'commit', '-m', 'Initial: Build graph index'],
+            cwd=target_dir, capture_output=True
+        )
+
+    print("  git commit             [OK] — Graph state anchored in git history")

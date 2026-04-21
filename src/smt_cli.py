@@ -425,7 +425,8 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str
 # ---------------------------------------------------------------------------
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
-                file_filter: Optional[str] = None, compress: bool = False) -> int:
+                file_filter: Optional[str] = None, compress: bool = False,
+                compact: bool = False, brief: bool = False) -> int:
     from src.graph.compressor import compress_subgraph, format_compression_stats
     from src.graph.cycle_detector import detect_cycles
 
@@ -449,12 +450,19 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         edges = subgraph["edges"]
 
         labels = root.get("labels", [])
-        print(f"\n{root.get('name')}  [{', '.join(labels)}]")
-        print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
-        if root.get("signature"):
-            print(f"  sig:  {root.get('signature')}")
-        if root.get("docstring"):
-            print(f"  doc:  {root.get('docstring')[:120]}")
+        if compact:
+            print(f"{root.get('name')} [{', '.join(labels)}] {root.get('file', '?')}:{root.get('line', '?')}")
+            if root.get("signature"):
+                print(f"sig: {root.get('signature')}")
+            if root.get("docstring") and not brief:
+                print(f"doc: {root.get('docstring')[:120]}")
+        else:
+            print(f"\n{root.get('name')}  [{', '.join(labels)}]")
+            print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
+            if root.get("signature"):
+                print(f"  sig:  {root.get('signature')}")
+            if root.get("docstring") and not brief:
+                print(f"  doc:  {root.get('docstring')[:120]}")
 
         node_names = [n["name"] for n in nodes]
         edge_tuples = [(e["src"], e["dst"]) for e in edges]
@@ -479,13 +487,17 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
 
         outbound_calls = [e for e in edge_tuples if e[0] == symbol]
         if outbound_calls:
-            print(f"\n  calls ({len(outbound_calls)}):")
-            for edge in outbound_calls:
-                target = edge[1]
-                target_node = next((n for n in nodes if n["name"] == target), None)
-                file_str = target_node.get("file", "?") if target_node else "?"
-                file_base = Path(file_str).name if file_str != "?" else "?"
-                print(f"    {target}  ({file_base})")
+            if compact:
+                call_names = ", ".join(e[1] for e in outbound_calls)
+                print(f"calls({len(outbound_calls)}): {call_names}")
+            else:
+                print(f"\n  calls ({len(outbound_calls)}):")
+                for edge in outbound_calls:
+                    target = edge[1]
+                    target_node = next((n for n in nodes if n["name"] == target), None)
+                    file_str = target_node.get("file", "?") if target_node else "?"
+                    file_base = Path(file_str).name if file_str != "?" else "?"
+                    print(f"    {target}  ({file_base})")
 
         if cycle_groups:
             for cg in cycle_groups:
@@ -502,31 +514,52 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
                     name=symbol
                 ).data()
                 if callers_data:
-                    print(f"\n  callers ({len(callers_data)}):")
-                    for c in callers_data:
-                        file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
-                        print(f"    {c['name']}  ({file_base})")
+                    if compact:
+                        caller_names = ", ".join(c['name'] for c in callers_data)
+                        print(f"callers({len(callers_data)}): {caller_names}")
+                    else:
+                        print(f"\n  callers ({len(callers_data)}):")
+                        for c in callers_data:
+                            file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
+                            print(f"    {c['name']}  ({file_base})")
 
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
 
-        if compression_result and compression_result.bridges:
-            compression_line = format_compression_stats(original_node_count, original_edge_count,
-                                                       compression_result)
-            print(f"\n  context: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
-            print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+        if compact:
+            if compression_result and compression_result.bridges:
+                compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                           compression_result)
+                stats_line = f"context: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
+            else:
+                stats_line = f"nodes={len(nodes)} edges={len(edges)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
+            try:
+                validation = _get_validation(_resolve_project_path())
+                from src.graph.validator import format_stale_files_line, format_validation_line
+                print(f"{stats_line}  {format_validation_line(validation)}")
+                stale = format_stale_files_line(validation)
+                if stale:
+                    print(stale)
+            except Exception as e:
+                logger.debug(f"Validation check failed: {e}")
+                print(stats_line)
         else:
-            print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
-                  f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
-
-        try:
-            validation = _get_validation(_resolve_project_path())
-            from src.graph.validator import format_stale_files_line, format_validation_line
-            print(f"  {format_validation_line(validation)}")
-            stale = format_stale_files_line(validation)
-            if stale:
-                print(stale)
-        except Exception as e:
-            logger.debug(f"Validation check failed: {e}")
+            if compression_result and compression_result.bridges:
+                compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                           compression_result)
+                print(f"\n  context: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
+                print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+            else:
+                print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
+                      f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
+            try:
+                validation = _get_validation(_resolve_project_path())
+                from src.graph.validator import format_stale_files_line, format_validation_line
+                print(f"  {format_validation_line(validation)}")
+                stale = format_stale_files_line(validation)
+                if stale:
+                    print(stale)
+            except Exception as e:
+                logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
@@ -540,7 +573,8 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
 # definition
 # ---------------------------------------------------------------------------
 
-def cmd_definition(symbol: str, file_filter: Optional[str] = None) -> int:
+def cmd_definition(symbol: str, file_filter: Optional[str] = None,
+                   compact: bool = False, brief: bool = False) -> int:
     """Fast definition lookup — just the signature and 1-hop callees."""
     project_path = _resolve_project_path()
     if not _require_git(project_path):
@@ -596,12 +630,19 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None) -> int:
                 return 1
 
             n = node['n']
-            print(f"\n{n.get('name')}  [{', '.join(n.labels)}]")
-            print(f"  file: {n.get('file', '?')}:{n.get('line', '?')}")
-            if n.get('signature'):
-                print(f"  sig:  {n.get('signature')}")
-            if n.get('docstring'):
-                print(f"  doc:  {n.get('docstring')}")
+            if compact:
+                print(f"{n.get('name')} [{', '.join(n.labels)}] {n.get('file', '?')}:{n.get('line', '?')}")
+                if n.get('signature'):
+                    print(f"sig: {n.get('signature')}")
+                if n.get('docstring') and not brief:
+                    print(f"doc: {n.get('docstring')[:120]}")
+            else:
+                print(f"\n{n.get('name')}  [{', '.join(n.labels)}]")
+                print(f"  file: {n.get('file', '?')}:{n.get('line', '?')}")
+                if n.get('signature'):
+                    print(f"  sig:  {n.get('signature')}")
+                if n.get('docstring') and not brief:
+                    print(f"  doc:  {n.get('docstring')}")
 
             callee_pid = "{project_id: $pid}" if project_id else ""
             callees = session.run(
@@ -611,15 +652,22 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None) -> int:
                 name=symbol, pid=project_id
             ).data()
             if callees:
-                print(f"\n  calls ({len(callees)}):")
-                for c in callees:
-                    file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
-                    print(f"    {c['name']}  ({file_base})")
+                if compact:
+                    callee_names = ", ".join(c['name'] for c in callees)
+                    print(f"calls({len(callees)}): {callee_names}")
+                else:
+                    print(f"\n  calls ({len(callees)}):")
+                    for c in callees:
+                        file_base = Path(c.get("file", "?")).name if c.get("file") else "?"
+                        print(f"    {c['name']}  ({file_base})")
 
             try:
                 validation = _get_validation(_resolve_project_path())
                 from src.graph.validator import format_stale_files_line, format_validation_line
-                print(f"\n  {format_validation_line(validation)}")
+                if compact:
+                    print(f"{format_validation_line(validation)}")
+                else:
+                    print(f"\n  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
                     print(stale)
@@ -631,6 +679,83 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None) -> int:
         print(f"ERROR: {e}")
         import traceback
         logger.error(f"cmd_definition error: {traceback.format_exc()}")
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# view
+# ---------------------------------------------------------------------------
+
+def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int = 0) -> int:
+    """Show only the source lines for a symbol — graph lookup then targeted file read."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    project_id = _get_project_id(project_path)
+    try:
+        client = _get_neo4j_client(project_id)
+        pid_clause = "AND n.project_id = $pid" if project_id else ""
+
+        with client.driver.session() as session:
+            if file_filter:
+                query = f"""
+                    MATCH (n {{name: $name}})
+                    WHERE n.file CONTAINS $file {pid_clause}
+                    RETURN n LIMIT 1
+                """
+                row = session.run(query, name=symbol, file=file_filter, pid=project_id).single()
+            else:
+                query = f"""
+                    MATCH (n {{name: $name}})
+                    WHERE 1=1 {pid_clause}
+                    RETURN n,
+                           CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END AS priority
+                    ORDER BY priority LIMIT 1
+                """
+                row = session.run(query, name=symbol, pid=project_id).single()
+
+        client.driver.close()
+
+        if not row:
+            print(f"Symbol '{symbol}' not found in graph.")
+            return 1
+
+        n = row["n"]
+        file_path = n.get("file")
+        line_start = n.get("line")
+        line_end = n.get("end_line")
+
+        if not file_path or not line_start:
+            print(f"Symbol '{symbol}' has no file/line info in graph.")
+            return 1
+
+        if not Path(file_path).exists():
+            print(f"File not found: {file_path}")
+            return 1
+
+        lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        total = len(lines)
+
+        # line numbers are 1-indexed; fall back to 30-line window if end_line missing
+        start = max(0, line_start - 1 - context_lines)
+        end = min(total, (line_end if line_end else line_start + 29) + context_lines)
+
+        label = f"{symbol}  [{', '.join(n.labels)}]"
+        range_str = f"lines {start + 1}–{end}" + (f"  (end_line not in graph — showing window)" if not line_end else "")
+        print(f"\n{label}")
+        print(f"  {file_path}:{line_start}  {range_str}\n")
+
+        width = len(str(end))
+        for i, text in enumerate(lines[start:end], start=start + 1):
+            marker = ">" if i == line_start else " "
+            print(f"  {marker} {str(i).rjust(width)}  {text}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        import traceback
+        logger.error(f"cmd_view error: {traceback.format_exc()}")
         return 1
 
 
@@ -663,7 +788,8 @@ def _compute_depths(
     return depths
 
 
-def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
+def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
+               compact: bool = False, brief: bool = False) -> int:
     """Impact analysis — what breaks if I change this symbol?"""
     from src.graph.compressor import compress_subgraph, format_compression_stats
     from src.graph.cycle_detector import detect_cycles
@@ -688,8 +814,11 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
 
         labels = root.get("labels", [])
         total_callers = len([n for n in nodes if n["name"] != symbol])
-        print(f"\nImpact: {root.get('name')}  [{', '.join(labels)}]  ({total_callers} caller{'s' if total_callers != 1 else ''})")
-        print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
+        if compact:
+            print(f"Impact: {root.get('name')} [{', '.join(labels)}] {total_callers} caller{'s' if total_callers != 1 else ''} | {root.get('file', '?')}:{root.get('line', '?')}")
+        else:
+            print(f"\nImpact: {root.get('name')}  [{', '.join(labels)}]  ({total_callers} caller{'s' if total_callers != 1 else ''})")
+            print(f"  file: {root.get('file', '?')}:{root.get('line', '?')}")
 
         depths = _compute_depths(root.get('name', symbol), edges)
 
@@ -704,15 +833,18 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
 
         for depth_level in sorted(callers_by_depth.keys()):
             callers_list = callers_by_depth[depth_level]
-            if depth_level == 1:
-                label = "direct callers"
+            if compact:
+                print(f"depth{depth_level}({len(callers_list)}): {', '.join(sorted(callers_list))}")
             else:
-                label = f"indirect callers — depth {depth_level}"
-            print(f"\n  {label} ({len(callers_list)}):")
-            for caller in sorted(callers_list):
-                caller_node = next((n for n in nodes if n["name"] == caller), None)
-                file_base = Path(caller_node.get("file", "?")).name if caller_node else "?"
-                print(f"    {caller}  ({file_base})")
+                if depth_level == 1:
+                    label = "direct callers"
+                else:
+                    label = f"indirect callers — depth {depth_level}"
+                print(f"\n  {label} ({len(callers_list)}):")
+                for caller in sorted(callers_list):
+                    caller_node = next((n for n in nodes if n["name"] == caller), None)
+                    file_base = Path(caller_node.get("file", "?")).name if caller_node else "?"
+                    print(f"    {caller}  ({file_base})")
 
         original_node_count = len(nodes)
         original_edge_count = len(edges)
@@ -751,23 +883,40 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False) -> int:
 
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
 
-        if compression_result and compression_result.bridges:
-            compression_line = format_compression_stats(original_node_count, original_edge_count,
-                                                       compression_result)
-            print(f"\n  impact: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
-            print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+        if compact:
+            if compression_result and compression_result.bridges:
+                compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                           compression_result)
+                stats_line = f"impact: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
+            else:
+                stats_line = f"nodes={len(nodes)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
+            try:
+                validation = _get_validation(_resolve_project_path())
+                from src.graph.validator import format_stale_files_line, format_validation_line
+                print(f"{stats_line}  {format_validation_line(validation)}")
+                stale = format_stale_files_line(validation)
+                if stale:
+                    print(stale)
+            except Exception as e:
+                logger.debug(f"Validation check failed: {e}")
+                print(stats_line)
         else:
-            print(f"\n  impact: nodes={len(nodes)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
-
-        try:
-            validation = _get_validation(_resolve_project_path())
-            from src.graph.validator import format_stale_files_line, format_validation_line
-            print(f"  {format_validation_line(validation)}")
-            stale = format_stale_files_line(validation)
-            if stale:
-                print(stale)
-        except Exception as e:
-            logger.debug(f"Validation check failed: {e}")
+            if compression_result and compression_result.bridges:
+                compression_line = format_compression_stats(original_node_count, original_edge_count,
+                                                           compression_result)
+                print(f"\n  impact: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
+                print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
+            else:
+                print(f"\n  impact: nodes={len(nodes)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
+            try:
+                validation = _get_validation(_resolve_project_path())
+                from src.graph.validator import format_stale_files_line, format_validation_line
+                print(f"  {format_validation_line(validation)}")
+                stale = format_stale_files_line(validation)
+                if stale:
+                    print(stale)
+            except Exception as e:
+                logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
@@ -1124,6 +1273,7 @@ commands:
   build --check          Show graph stats
   build --clear          Wipe and rebuild
   definition <symbol>    Symbol definition (fast, 1-hop)
+  view <symbol>          Show symbol source lines (graph lookup + targeted file read)
   context <symbol>       Symbol context (bidirectional, bounded)
   context <symbol> --callers  Who calls this symbol
   impact <symbol>        Impact analysis (reverse traversal)
@@ -1170,19 +1320,32 @@ graph analysis:
     p_ctx.add_argument('--callers', action='store_true')
     p_ctx.add_argument('--file', default=None)
     p_ctx.add_argument('--compress', action='store_true')
+    p_ctx.add_argument('--compact', action='store_true')
+    p_ctx.add_argument('--brief', action='store_true')
     p_ctx.add_argument('--json', action='store_true')
 
     # definition
     p_def = sub.add_parser('definition', help='Symbol definition (fast, 1-hop)')
     p_def.add_argument('symbol')
     p_def.add_argument('--file', default=None)
+    p_def.add_argument('--compact', action='store_true')
+    p_def.add_argument('--brief', action='store_true')
     p_def.add_argument('--json', action='store_true')
+
+    # view
+    p_view = sub.add_parser('view', help='Show symbol source lines (graph lookup + targeted file read)')
+    p_view.add_argument('symbol')
+    p_view.add_argument('--file', default=None)
+    p_view.add_argument('--context', type=int, default=0, dest='context_lines',
+                        help='Extra lines before/after the symbol body (default: 0)')
 
     # impact
     p_impact = sub.add_parser('impact', help='Impact analysis: what breaks if I change this?')
     p_impact.add_argument('symbol')
     p_impact.add_argument('--depth', type=int, default=None)
     p_impact.add_argument('--compress', action='store_true')
+    p_impact.add_argument('--compact', action='store_true')
+    p_impact.add_argument('--brief', action='store_true')
     p_impact.add_argument('--json', action='store_true')
 
     # search
@@ -1299,14 +1462,19 @@ graph analysis:
             print(json.dumps(result.model_dump(), indent=2))
             return 0 if result.found else 1
         return cmd_context(args.symbol, depth=depth, callers=args.callers,
-                          file_filter=args.file, compress=args.compress)
+                          file_filter=args.file, compress=args.compress,
+                          compact=getattr(args, 'compact', False), brief=getattr(args, 'brief', False))
     elif args.command == 'definition':
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.definition(args.symbol)
             print(json.dumps(result.model_dump(), indent=2))
             return 0 if result.found else 1
-        return cmd_definition(args.symbol, file_filter=args.file)
+        return cmd_definition(args.symbol, file_filter=args.file,
+                              compact=getattr(args, 'compact', False), brief=getattr(args, 'brief', False))
+    elif args.command == 'view':
+        return cmd_view(args.symbol, file_filter=args.file,
+                        context_lines=getattr(args, 'context_lines', 0))
     elif args.command == 'impact':
         depth = args.depth if args.depth is not None else _get_default_depth(3)
         if getattr(args, 'json', False):
@@ -1314,7 +1482,8 @@ graph analysis:
             result = engine.impact(args.symbol, depth=depth)
             print(json.dumps(result.model_dump(), indent=2))
             return 0 if result.found else 1
-        return cmd_impact(args.symbol, max_depth=depth, compress=args.compress)
+        return cmd_impact(args.symbol, max_depth=depth, compress=args.compress,
+                         compact=getattr(args, 'compact', False), brief=getattr(args, 'brief', False))
     elif args.command == 'search':
         if getattr(args, 'json', False):
             engine = _get_engine()

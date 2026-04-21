@@ -11,8 +11,9 @@ class Symbol:
     name: str
     type: str  # "function", "class", "variable", "import", "type"
     file: str  # Absolute file path
-    line: int  # 1-indexed line number
-    column: int  # 0-indexed column number
+    line: int      # 1-indexed start line
+    column: int    # 0-indexed column number
+    end_line: Optional[int] = None  # 1-indexed last line of the symbol body
     docstring: Optional[str] = None
     parent: Optional[str] = None  # Qualified name of parent (e.g., "ClassName" for methods)
     node_id: Optional[str] = None  # Unique ID: "type:file:line:name"

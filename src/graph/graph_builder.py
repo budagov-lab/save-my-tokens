@@ -212,6 +212,7 @@ class GraphBuilder:
                     file=symbol.file,
                     line=symbol.line,
                     column=symbol.column,
+                    end_line=symbol.end_line,
                     docstring=symbol.docstring,
                     parent=symbol.parent,
                     project_id=self.project_id,
