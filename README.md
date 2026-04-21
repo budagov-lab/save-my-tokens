@@ -40,9 +40,9 @@ cd save-my-tokens
 python install.py
 ```
 
-`install.py` creates a venv, bootstraps pip, installs all dependencies, creates `.env`, and starts Neo4j via Docker. First run takes 5–10 minutes (PyTorch is ~2 GB).
+`install.py` creates a venv, installs all dependencies, and starts Neo4j via Docker. First run takes 5–10 minutes (PyTorch is ~2 GB).
 
-Requires Python 3.11+ from python.org (not Microsoft Store — missing `ensurepip`) and Docker.
+Requires Python 3.11+ from [python.org](https://python.org) (not Microsoft Store — missing `ensurepip`) and Docker.
 
 ```bash
 # Point SMT at your codebase and build the graph
@@ -85,7 +85,6 @@ $ smt context GraphBuilder --depth 2
 
 GraphBuilder  [Class]
   ...
-
   calls (3): _parse_all_files, _create_nodes, _create_edges
 
   [Cycle: CallAnalyzer._infer_edge_type → _resolve_target → _infer_edge_type]
@@ -117,37 +116,62 @@ Impact: Neo4jClient  [Class]
   depth 1 — direct callers (5):
     GraphBuilder          graph_builder.py
     IncrementalUpdater    incremental/updater.py
-    SMTQueryEngine        agents/query_engine.py
     ...
 
   depth 2 — indirect callers (3):
-    cmd_build, cmd_diff, cmd_status
+    cmd_build, cmd_sync, cmd_status
 
   impact: total=8 depth=2 cycles=0
 ```
 
+### `view` — Show the source
+
+Jump directly to a symbol's source lines without reading the whole file:
+
+```bash
+smt view GraphBuilder            # symbol source lines only
+smt view GraphBuilder --context 5  # with 5 lines of surrounding context
+```
+
 ---
 
-## Other Commands
+## More Commands
 
 ```bash
 # Semantic search (local embeddings, no API calls)
-smt search "cycle detection"
+smt search "cycle detection algorithm"
 
 # Sync graph after commits (incremental, ~10x faster than full rebuild)
-smt sync HEAD~1..HEAD
+smt sync                         # default: HEAD~1..HEAD
+smt sync main..feature-branch    # custom range
 
-# Full rebuild
-smt build --clear
+# Enumerate symbols
+smt list --module src/parsers    # all symbols in a path
+smt scope graph_builder          # file exports, imports, internal symbols
+smt unused                       # dead code candidates
 
-# Graph health: node/edge counts, git freshness
-smt status
+# Architecture analysis
+smt cycles                       # circular dependencies
+smt hot --top 10                 # most-called symbols (coupling hotspots)
+smt complexity --top 10          # fan-in × fan-out god functions
+smt bottleneck --top 5           # cross-file bridge symbols
+smt modules                      # files ranked by coupling
+smt path A B                     # shortest call path between two symbols
 
-# Manage Neo4j
-smt start | stop
+# Breaking change detection
+smt breaking-changes MyFunction  # compare HEAD~1..HEAD
+smt breaking-changes MyFunction --before v1.0 --after v1.1
 
-# Configure a project (writes .claude/settings.json with hooks)
-smt setup [--dir PATH]
+# PR review
+smt changes main..feature-branch # symbols in changed files + caller counts
+
+# Graph management
+smt build --check                # show graph stats
+smt build --clear                # wipe and rebuild from scratch
+smt status                       # node/edge counts, git freshness
+smt start                        # start Neo4j container
+smt stop                         # stop Neo4j container
+smt setup [--dir PATH]           # configure project (.claude/settings.json + hooks)
 ```
 
 ---
@@ -155,88 +179,70 @@ smt setup [--dir PATH]
 ## CLI Reference
 
 ```
-smt build [--dir PATH]         Build or sync graph
-smt build --check              Show graph statistics
-smt build --clear              Wipe and rebuild
+smt build [--dir PATH] [--check] [--clear]
+smt sync [RANGE]
 
-smt definition SYMBOL          1-hop lookup
-smt context SYMBOL [--depth N] [--compress]   Bidirectional context
-smt context SYMBOL --callers   Callers-only traversal
-smt impact SYMBOL [--depth N]  Reverse traversal
-smt search QUERY               Semantic search by meaning
+smt definition SYMBOL [--file SUBSTR] [--compact] [--brief]
+smt context   SYMBOL [--depth N] [--compress] [--callers] [--compact] [--brief]
+smt impact    SYMBOL [--depth N] [--compress] [--compact] [--brief]
+smt view      SYMBOL [--file SUBSTR] [--context N]
+smt search    QUERY  [--top N]
 
-smt sync [RANGE]               Incremental sync (default: HEAD~1..HEAD)
-smt status                     Graph health check
+smt list      [--module PATH]
+smt scope     FILE
+smt unused
+smt cycles
+smt hot       [--top N]
+smt complexity [--top N]
+smt bottleneck [--top N]
+smt modules
+smt path      A B
+smt changes   [RANGE]
+smt breaking-changes SYMBOL [--before REF] [--after REF]
 
-smt start                      Start Neo4j container
-smt stop                       Stop Neo4j container
-smt setup [--dir PATH]         Configure project hooks
+smt status
+smt start
+smt stop
+smt setup     [--dir PATH]
 ```
+
+**Output flags** (apply to `definition`, `context`, `impact`):
+- `--compact` — single-line format, 40–60% fewer tokens
+- `--brief` — suppress docstrings
+- `--compress` — remove trivial pass-through functions from context
 
 ---
 
 ## Agent Integration
 
-### CLI (subprocess)
-
-Works from any language or agent framework:
+SMT works as a subprocess from any agent framework:
 
 ```bash
 smt definition validate_graph
-smt impact GraphBuilder.__init__ --depth 3
-smt context Neo4jClient --depth 2 --compress
+smt context GraphBuilder --depth 2 --compress
+smt impact Neo4jClient --depth 3
 ```
 
-### Python API (`SMTQueryEngine`)
+### Claude Code
 
-For structured agent workflows without subprocess overhead:
+Run `smt setup` once in your project to install hooks. This writes `.claude/settings.json` with:
+- **PreToolUse hooks** — blocks raw file reads and greps, routes them through SMT first
+- **`SMT_AGENT=1`** env var — automatically suppresses log noise and applies compact output in agent sessions
 
-```python
-from src.agents.query_engine import SMTQueryEngine
-
-engine = SMTQueryEngine()
-
-result = engine.definition("GraphBuilder")
-# → {"found": True, "name": "GraphBuilder", "file": "...", "line": 23, "callees": [...]}
-
-result = engine.context("GraphBuilder", depth=2, compress=True)
-# → {"found": True, "nodes": [...], "edges": [...], "cycles": [...], "bridges_removed": 3}
-
-result = engine.impact("Neo4jClient", depth=3)
-# → {"found": True, "callers_by_depth": {1: [...], 2: [...]}, "total_callers": 8}
-
-results = engine.search("cycle detection", top_k=5)
-# → [{"name": "...", "file": "...", "score": 0.95}, ...]
-
-engine.close()
-```
-
-All methods return JSON-serializable dicts with no stdout side effects.
-
-### Agent Harness (Scout / Fabler / PathFinder)
-
-SMT ships a team of specialized subagents for multi-step analysis in Claude Code:
-
-| Agent | Question it answers |
-|---|---|
-| **Scout** | "What is X? Who calls it? Is the graph fresh?" |
-| **Fabler** | "What breaks if I change X? In what order do I make the changes?" |
-| **PathFinder** | "Which parts of this module can I refactor independently?" |
-
-Invoke via Claude Code:
+Then use the built-in skill:
 
 ```
 /smt-analysis
 ```
 
-Or ask naturally — "what breaks if I change X?" triggers Scout → Fabler automatically.
+Or ask naturally — "what breaks if I change X?" / "architecture health check" / "what parts can be worked on independently?"
 
 ---
 
 ## Architecture
 
 ```
-Source Code (Python / TypeScript)
+Source Code (Python / TypeScript / Go / Rust / Java)
         ↓  Tree-sitter parsing
    SymbolIndex  (functions, classes, imports)
         ↓  CallAnalyzer
@@ -249,10 +255,10 @@ Source Code (Python / TypeScript)
   │  Validator (git freshness)      │  ← warns when graph is stale
   └─────────────────────────────────┘
         ↓
-   CLI / SMTQueryEngine / Agents
+   CLI (smt) / Claude Code skill
 ```
 
-**Embeddings**: Local `all-MiniLM-L6-v2` (384-dim, via SentenceTransformers) stored in `.smt/embeddings/`. No API calls, fully offline.
+**Embeddings**: Local `all-MiniLM-L6-v2` (384-dim, SentenceTransformers) stored in `.smt/`. No API calls, fully offline.
 
 **Project isolation**: All graph nodes carry a `project_id` (SHA256 of project root path) so multiple projects share one Neo4j instance without colliding.
 
@@ -261,7 +267,7 @@ Source Code (Python / TypeScript)
 ## Requirements
 
 - Python 3.11+ (from python.org, not Microsoft Store)
-- Docker (for Neo4j, or point to an existing instance)
+- Docker (for Neo4j)
 - Git
 
 ---
