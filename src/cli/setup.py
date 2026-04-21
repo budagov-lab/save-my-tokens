@@ -222,6 +222,7 @@ def cmd_setup(target_dir: Path) -> int:
     existing.setdefault('env', {})
     existing['env']['SMT_DIR'] = str(SMT_DIR)
     existing['env']['SMT_PROJECT'] = target_dir.name
+    existing['env']['SMT_AGENT'] = '1'
     existing['respectGitignore'] = True
 
     # PreToolUse hooks — inject SMT skill into Explorer, Planner, and Advisor

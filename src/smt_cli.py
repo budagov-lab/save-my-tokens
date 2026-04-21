@@ -24,12 +24,19 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
+
+# When running inside an agent harness (SMT_AGENT=1 set via .claude/settings.json),
+# suppress all non-error logs so they don't pollute tool output / waste context tokens.
+if os.environ.get("SMT_AGENT"):
+    logger.remove()
+    logger.add(sys.stderr, level="ERROR")
 
 # Ensure UTF-8 output on Windows
 if sys.platform == 'win32':
