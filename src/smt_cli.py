@@ -32,11 +32,31 @@ from typing import Optional
 
 from loguru import logger
 
-# When running inside an agent harness (SMT_AGENT=1 set via .claude/settings.json),
-# suppress all non-error logs so they don't pollute tool output / waste context tokens.
+# When running inside an agent harness (SMT_AGENT=1 set via .claude/settings.json):
+#   - suppress all non-error logs (no noise in tool output)
+#   - strip ANSI color codes from stdout (escape sequences waste tokens)
 if os.environ.get("SMT_AGENT"):
     logger.remove()
     logger.add(sys.stderr, level="ERROR")
+
+    import re as _re
+
+    class _StripAnsi:
+        _pat = _re.compile(r"\x1b\[[0-9;]*[mGKHF]")
+
+        def __init__(self, stream):
+            self._s = stream
+
+        def write(self, text):
+            self._s.write(self._pat.sub("", text))
+
+        def flush(self):
+            self._s.flush()
+
+        def __getattr__(self, name):
+            return getattr(self._s, name)
+
+    sys.stdout = _StripAnsi(sys.stdout)
 
 # Ensure UTF-8 output on Windows
 if sys.platform == 'win32':
@@ -1458,6 +1478,13 @@ graph analysis:
     p_bc.add_argument('--after', default='HEAD', dest='after_ref')
 
     args = parser.parse_args()
+
+    # In agent mode: default compact + brief on every query (saves 40-60% tokens).
+    # Explicit --no-compact / --no-brief flags are not wired, so this is unconditional.
+    if os.environ.get("SMT_AGENT"):
+        for _flag in ("compact", "brief"):
+            if hasattr(args, _flag) and not getattr(args, _flag):
+                setattr(args, _flag, True)
 
     if args.command == 'build':
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
