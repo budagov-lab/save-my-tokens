@@ -1,6 +1,5 @@
 """Incremental symbol updater for git-based changes."""
 
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -11,6 +10,14 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from src.graph.neo4j_client import Neo4jClient
 from src.graph.node_types import CommitNode
 from src.incremental.diff_parser import DiffParser
+from src.incremental.git_ops import get_commit_metadata, run_git
+from src.incremental.node_manager import (
+    LABEL_TO_SYM_TYPE,
+    create_symbol_node,
+    delete_symbol_node,
+    query_symbols_in_file,
+    symbol_type_to_label,
+)
 from src.incremental.symbol_delta import SymbolDelta, UpdateResult
 from src.parsers.python_parser import PythonParser
 from src.parsers.symbol import Symbol
@@ -217,57 +224,14 @@ class IncrementalSymbolUpdater:
         logger.debug(f"Neo4j transaction committed for {delta.file}")
 
     # Maps NodeType.value → Symbol.type (inverse of GraphBuilder._map_symbol_type_to_node_type)
-    _LABEL_TO_SYM_TYPE: Dict[str, str] = {
-        "Function": "function",
-        "Class": "class",
-        "Variable": "variable",
-        "Module": "import",
-        "Type": "type",
-        "Interface": "interface",
-    }
+    _LABEL_TO_SYM_TYPE: Dict[str, str] = LABEL_TO_SYM_TYPE
 
     @staticmethod
     def _symbol_type_to_label(sym_type: str) -> str:
-        """Map Symbol.type string ('function', 'class', …) to Neo4j label."""
-        mapping = {
-            "function": "Function",
-            "class": "Class",
-            "variable": "Variable",
-            "import": "Module",
-            "type": "Type",
-            "interface": "Interface",
-        }
-        return mapping.get(sym_type, "Variable")
+        return symbol_type_to_label(sym_type)
 
     def _query_symbols_in_file(self, file_path: str) -> List[Symbol]:
-        """Query Neo4j for all symbol nodes in a file (the 'before' state for delta computation)."""
-        pid = self.neo4j.project_id or ""
-        pid_filter = "AND n.project_id = $pid" if pid else ""
-        query = f"""
-        MATCH (n)
-        WHERE n.file = $file AND n.name IS NOT NULL
-              AND NOT n:File AND NOT n:Commit
-              {pid_filter}
-        RETURN n.name AS name, n.type AS ntype, n.file AS file,
-               n.line AS line, n.column AS col, n.parent AS parent
-        """
-        params: Dict[str, Any] = {"file": file_path}
-        if pid:
-            params["pid"] = pid
-        symbols: List[Symbol] = []
-        with self.neo4j.driver.session() as session:
-            for row in session.run(query, **params):
-                # ntype is the NodeType.value stored in the node (e.g. "Function")
-                sym_type = self._LABEL_TO_SYM_TYPE.get(row["ntype"] or "", "variable")
-                symbols.append(Symbol(
-                    name=row["name"],
-                    type=sym_type,
-                    file=row["file"],
-                    line=row["line"] or 1,
-                    column=row["col"] or 0,
-                    parent=row["parent"],
-                ))
-        return symbols
+        return query_symbols_in_file(self.neo4j, file_path)
 
     def _remove_symbol(self, symbol: Symbol) -> None:
         """Remove symbol from in-memory index.
@@ -282,43 +246,10 @@ class IncrementalSymbolUpdater:
             logger.warning(f"Symbol not in index: {symbol.qualified_name}")
 
     def _delete_symbol_node(self, tx, file_path: str, symbol_name: str) -> None:
-        """Delete a symbol node and all its edges from Neo4j (DETACH DELETE)."""
-        pid = self.neo4j.project_id or ""
-        pid_clause = "AND n.project_id = $pid" if pid else ""
-        query = f"MATCH (n {{file: $file, name: $name}}) WHERE 1=1 {pid_clause} DETACH DELETE n"
-        params: Dict[str, Any] = {"file": file_path, "name": symbol_name}
-        if pid:
-            params["pid"] = pid
-        tx.run(query, **params)
-        logger.debug(f"Deleted node for {symbol_name} in {file_path}")
+        delete_symbol_node(tx, self.neo4j, file_path, symbol_name)
 
     def _create_symbol_node(self, tx, symbol: Symbol) -> None:
-        """Create or update a symbol node in Neo4j using the correct label."""
-        label = self._symbol_type_to_label(symbol.type)
-        pid = self.neo4j.project_id or ""
-        node_id = symbol.node_id or f"{symbol.type}:{symbol.file}:{symbol.line}:{symbol.name}"
-        query = f"""
-        MERGE (n:{label} {{node_id: $node_id}})
-        SET n.name = $name,
-            n.type = $label,
-            n.file = $file,
-            n.line = $line,
-            n.column = $column,
-            n.parent = $parent,
-            n.project_id = $pid
-        """
-        tx.run(
-            query,
-            node_id=node_id,
-            name=symbol.name,
-            label=label,
-            file=symbol.file,
-            line=symbol.line,
-            column=symbol.column,
-            parent=symbol.parent or "",
-            pid=pid,
-        )
-        logger.debug(f"Created/updated node for {symbol.qualified_name}")
+        create_symbol_node(tx, self.neo4j, symbol)
 
     # _update_symbol_node removed — _update_neo4j now does delete + create for modified symbols
 
@@ -350,85 +281,10 @@ class IncrementalSymbolUpdater:
         logger.info(f"Rolled back {restored} symbols for {file_path}")
 
     def _run_git(self, args: List[str], cwd: Optional[str] = None) -> str:
-        """Run a git command and return output.
-
-        Args:
-            args: Git command arguments (e.g., ["diff", "HEAD~1..HEAD"])
-            cwd: Working directory for git command
-
-        Returns:
-            Command output (stdout)
-
-        Raises:
-            RuntimeError: If git command fails
-        """
-        try:
-            result = subprocess.run(
-                ["git"] + args,
-                cwd=cwd or str(self.base_path),
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return result.stdout
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Git command failed: {' '.join(args)}\n{e.stderr}") from e
-        except FileNotFoundError as e:
-            raise RuntimeError("Git not found in PATH") from e
+        return run_git(args, cwd or str(self.base_path))
 
     def _get_commit_metadata(self, ref: str, repo_path: str) -> CommitNode:
-        """Extract commit metadata from git log.
-
-        Args:
-            ref: Commit reference (e.g., "HEAD", "HEAD~1")
-            repo_path: Repository path
-
-        Returns:
-            CommitNode with metadata
-
-        Raises:
-            RuntimeError: If git log fails
-        """
-        # Format: "commit_hash|short_hash|message|author|timestamp|branch|files_changed"
-        output = self._run_git(
-            [
-                "log",
-                "-1",
-                "--format=%H|%h|%s|%an|%aI",
-                ref,
-            ],
-            cwd=repo_path,
-        ).strip()
-
-        if not output:
-            raise RuntimeError(f"Failed to get commit metadata for {ref}")
-
-        parts = output.split("|")
-        if len(parts) < 5:
-            raise RuntimeError(f"Invalid git log format: {output}")
-
-        commit_hash, short_hash, message, author, timestamp = parts[:5]
-
-        # Get branch name
-        branch_output = self._run_git(["rev-parse", "--abbrev-ref", ref], cwd=repo_path).strip()
-        branch = branch_output if branch_output else "unknown"
-
-        # Get files changed count
-        files_output = self._run_git(
-            ["diff-tree", "--no-commit-id", "--name-only", "-r", ref],
-            cwd=repo_path,
-        ).strip()
-        files_changed = len(files_output.split("\n")) if files_output else 0
-
-        return CommitNode(
-            commit_hash=commit_hash,
-            short_hash=short_hash,
-            message=message,
-            author=author,
-            timestamp=timestamp,
-            branch=branch,
-            files_changed=files_changed,
-        )
+        return get_commit_metadata(ref, repo_path)
 
     def _parse_file(self, abs_path: str) -> List[Symbol]:
         """Parse a file and extract symbols.

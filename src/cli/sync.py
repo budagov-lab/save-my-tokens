@@ -1,6 +1,5 @@
 """SMT sync command: incremental graph update from git commits."""
 
-import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -11,6 +10,7 @@ from src.cli._helpers import (
     _get_services,
     _resolve_project_path,
 )
+from src.incremental.git_ops import get_commit_metadata, run_git
 
 
 def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = None) -> int:
@@ -41,13 +41,13 @@ def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
 
         # Guard: single-commit repo — nothing to diff, but record HEAD so validator shows fresh.
         if commit_range == 'HEAD~1..HEAD':
-            count_result = subprocess.run(
-                ['git', 'rev-list', '--count', 'HEAD'],
-                cwd=str(target_path), capture_output=True, text=True,
-            )
-            if count_result.returncode == 0 and count_result.stdout.strip() == '1':
+            try:
+                count_out = run_git(['rev-list', '--count', 'HEAD'], str(target_path)).strip()
+            except RuntimeError:
+                count_out = ""
+            if count_out == '1':
                 try:
-                    commit_meta = updater._get_commit_metadata('HEAD', str(target_path))
+                    commit_meta = get_commit_metadata('HEAD', str(target_path))
                     client.create_commit_node(commit_meta)
                     print("✓ Graph marked fresh (single-commit repository)")
                 except Exception as e:
