@@ -25,6 +25,8 @@ _C = Colors
 
 _neo4j_client: Optional[Any] = None
 _validation_cache: Optional[Any] = None
+_project_path_cache: Optional[Path] = None
+_embedding_service_cache: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +117,6 @@ def _get_validation(repo_path: Path) -> Any:
 
 def _get_services() -> Any:
     """Lazy-import heavy services so CLI starts fast for docker/status commands."""
-    sys.path.insert(0, str(SMT_DIR))
     from src.config import settings
     from src.embeddings.embedding_service import EmbeddingService
     from src.graph.graph_builder import GraphBuilder
@@ -130,17 +131,32 @@ def _get_services() -> Any:
 # ---------------------------------------------------------------------------
 
 def _resolve_project_path() -> Path:
-    """Resolve project path from .smt_config or cwd."""
+    """Resolve project path from .smt_config or cwd. Result cached for the process lifetime."""
+    global _project_path_cache
+    if _project_path_cache is not None:
+        return _project_path_cache
     cwd = Path.cwd()
     smt_config_file = cwd / '.claude' / '.smt_config'
     if smt_config_file.exists():
         try:
             with open(smt_config_file, 'r', encoding='utf-8') as f:
                 smt_config = json.load(f)
-                return Path(smt_config['project_dir']).resolve()
+                _project_path_cache = Path(smt_config['project_dir']).resolve()
+                return _project_path_cache
         except (json.JSONDecodeError, KeyError, FileNotFoundError):
             pass
-    return cwd
+    _project_path_cache = cwd
+    return _project_path_cache
+
+
+def _get_embedding_service(cache_dir: Path) -> Any:
+    """Get or create singleton EmbeddingService (model loaded once per process)."""
+    global _embedding_service_cache
+    if _embedding_service_cache is None:
+        from src.parsers.symbol_index import SymbolIndex
+        from src.embeddings.embedding_service import EmbeddingService
+        _embedding_service_cache = EmbeddingService(SymbolIndex(), cache_dir=cache_dir)
+    return _embedding_service_cache
 
 
 def _get_default_depth(fallback: int) -> int:

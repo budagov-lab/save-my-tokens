@@ -1,9 +1,8 @@
-version: '3.9'
-
 services:
   neo4j:
     image: neo4j:5.14-community
     container_name: save-my-tokens-neo4j
+    restart: unless-stopped
     ports:
       - "7474:7474"  # HTTP
       - "7687:7687"  # Bolt
@@ -17,25 +16,11 @@ services:
       - neo4j_data:/var/lib/neo4j/data
       - neo4j_logs:/var/lib/neo4j/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7474"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 10s
-    networks:
-      - save-my-tokens
-
-  # Optional: pgAdmin for Neo4j Browser (UI for visualizing graph)
-  neo4j-browser:
-    image: neo4j:5.14-community
-    container_name: save-my-tokens-browser
-    ports:
-      - "7475:7474"
-    environment:
-      NEO4J_AUTH: "off"
-    depends_on:
-      neo4j:
-        condition: service_healthy
     networks:
       - save-my-tokens
 

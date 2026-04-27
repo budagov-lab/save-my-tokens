@@ -77,25 +77,26 @@ class PythonParser(BaseParser):
             sym = self._extract_function(node, source_code, file_path, parent)
             if sym is not None:
                 symbols.append(sym)
-            # Extract nested functions/classes
             self._extract_nested(node, source_code, file_path, symbols, parent)
+            return
 
         elif node.type == "class_definition":
             class_symbol = self._extract_class(node, source_code, file_path, parent)
             if class_symbol is not None:
                 symbols.append(class_symbol)
-                # Extract class methods
                 self._extract_class_members(
                     node, source_code, file_path, symbols, class_symbol.name
                 )
+            return
 
         elif node.type == "import_statement":
             symbols.extend(self._extract_imports(node, source_code, file_path))
+            return
 
         elif node.type == "import_from_statement":
             symbols.extend(self._extract_from_imports(node, source_code, file_path))
+            return
 
-        # Recursively process all children
         for child in node.children:
             self._extract_from_node(
                 child, source_code, file_path, symbols, parent=parent
@@ -205,7 +206,7 @@ class PythonParser(BaseParser):
         resolved_module = self.import_resolver.resolve_python_import(module_name, file_path)
 
         # Extract individual imports
-        imported_names = ImportResolver.extract_import_names(import_part)
+        imported_names = ImportResolver.extract_import_names(statement_text)
 
         for name in imported_names:
             if name == "*":

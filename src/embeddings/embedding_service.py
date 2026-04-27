@@ -64,11 +64,15 @@ class EmbeddingService:
         self.cache_dir = cache_dir or settings.DATA_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Model weights stored alongside the FAISS index so they're never re-downloaded
+        models_dir = self.cache_dir / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+
         # Initialize SentenceTransformer model
         self.embedding_model = None
         if SentenceTransformer:
             try:
-                self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL)
+                self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, cache_folder=str(models_dir))
                 logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
             except Exception as e:
                 error_msg = str(e)

@@ -383,14 +383,12 @@ class GraphBuilder:
 
     def _persist_to_neo4j(self) -> None:
         """Write nodes and edges to Neo4j."""
-        # Create indexes
         self.neo4j_client.create_indexes()
+        self.neo4j_client.clear_database()
 
-        # Create all nodes
         if self.nodes:
             self.neo4j_client.create_nodes_batch(self.nodes)
 
-        # Create all edges
         if self.edges:
             self.neo4j_client.create_edges_batch(self.edges)
 

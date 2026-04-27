@@ -80,6 +80,7 @@ from src.cli._helpers import (
     _ensure_smtignore,
     _get_default_depth,
     _get_engine,
+    _get_embedding_service,
     _get_neo4j_client,
     _get_project_id,
     _get_services,
@@ -115,12 +116,17 @@ from src.cli.watch import cmd_watch
 # docker
 # ---------------------------------------------------------------------------
 
+_NEO4J_CONTAINER = 'save-my-tokens-neo4j'
+
+_dc_cmd: list | None = None
+
 def _docker_compose_cmd() -> list:
     """Return the docker compose command — v2 ('docker compose') preferred, v1 fallback."""
-    result = subprocess.run(['docker', 'compose', 'version'], capture_output=True)
-    if result.returncode == 0:
-        return ['docker', 'compose']
-    return ['docker-compose']
+    global _dc_cmd
+    if _dc_cmd is None:
+        result = subprocess.run(['docker', 'compose', 'version'], capture_output=True)
+        _dc_cmd = ['docker', 'compose'] if result.returncode == 0 else ['docker-compose']
+    return _dc_cmd
 
 
 _CONFIG_KEYS = {
@@ -240,6 +246,7 @@ def cmd_docker(action: str) -> int:
     dc = _docker_compose_cmd()
 
     if action == 'up':
+        subprocess.run(['docker', 'rm', _NEO4J_CONTAINER], capture_output=True)
         result = subprocess.run(
             dc + ['-f', str(compose_file), 'up', '-d', 'neo4j'],
             cwd=SMT_DIR,
@@ -289,7 +296,7 @@ def cmd_docker(action: str) -> int:
         return 1
 
     elif action == 'down':
-        result = subprocess.run(dc + ['-f', str(compose_file), 'down'], cwd=SMT_DIR)
+        result = subprocess.run(['docker', 'stop', _NEO4J_CONTAINER], cwd=SMT_DIR)
     elif action == 'status':
         result = subprocess.run(dc + ['-f', str(compose_file), 'ps'], cwd=SMT_DIR)
     else:
@@ -411,15 +418,7 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str
 
     _ensure_smtignore(target_path)
 
-    _CANDIDATE_SRC_DIRS = ['src', 'app', 'lib', 'pkg', 'core', 'source']
-    src_dir = None
-    for dirname in _CANDIDATE_SRC_DIRS:
-        candidate = target_path / dirname
-        if candidate.exists() and candidate.is_dir():
-            src_dir = candidate
-            break
-    if src_dir is None:
-        src_dir = target_path
+    src_dir = target_path
 
     print(f"{'Rebuilding' if clear else 'Building'} graph from {src_dir} ...")
 
@@ -552,6 +551,13 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
 
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
 
+        try:
+            from src.graph.validator import format_stale_files_line, format_validation_line
+            validation = _get_validation(_resolve_project_path())
+        except Exception as e:
+            logger.debug(f"Validation check failed: {e}")
+            validation = None
+
         if compact:
             if compression_result and compression_result.bridges:
                 compression_line = format_compression_stats(original_node_count, original_edge_count,
@@ -559,15 +565,12 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
                 stats_line = f"context: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
             else:
                 stats_line = f"nodes={len(nodes)} edges={len(edges)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
-            try:
-                validation = _get_validation(_resolve_project_path())
-                from src.graph.validator import format_stale_files_line, format_validation_line
+            if validation:
                 print(f"{stats_line}  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
                     print(stale)
-            except Exception as e:
-                logger.debug(f"Validation check failed: {e}")
+            else:
                 print(stats_line)
         else:
             if compression_result and compression_result.bridges:
@@ -578,15 +581,11 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
             else:
                 print(f"\n  context: nodes={len(nodes)} edges={len(edges)} depth={max_depth} "
                       f"cycles={len(cycle_groups)} ~tokens={token_estimate}")
-            try:
-                validation = _get_validation(_resolve_project_path())
-                from src.graph.validator import format_stale_files_line, format_validation_line
+            if validation:
                 print(f"  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
                     print(stale)
-            except Exception as e:
-                logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
@@ -910,6 +909,13 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
 
         token_estimate = sum(len(n["name"]) + len(n.get("file", "")) + 30 for n in nodes) // 4
 
+        try:
+            from src.graph.validator import format_stale_files_line, format_validation_line
+            validation = _get_validation(_resolve_project_path())
+        except Exception as e:
+            logger.debug(f"Validation check failed: {e}")
+            validation = None
+
         if compact:
             if compression_result and compression_result.bridges:
                 compression_line = format_compression_stats(original_node_count, original_edge_count,
@@ -917,15 +923,12 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
                 stats_line = f"impact: {compression_line} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
             else:
                 stats_line = f"nodes={len(nodes)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}"
-            try:
-                validation = _get_validation(_resolve_project_path())
-                from src.graph.validator import format_stale_files_line, format_validation_line
+            if validation:
                 print(f"{stats_line}  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
                     print(stale)
-            except Exception as e:
-                logger.debug(f"Validation check failed: {e}")
+            else:
                 print(stats_line)
         else:
             if compression_result and compression_result.bridges:
@@ -935,15 +938,11 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
                 print(f"  compressed: {len(compression_result.bridges)} bridge functions removed")
             else:
                 print(f"\n  impact: nodes={len(nodes)} depth={max_depth} cycles={len(cycle_groups)} ~tokens={token_estimate}")
-            try:
-                validation = _get_validation(_resolve_project_path())
-                from src.graph.validator import format_stale_files_line, format_validation_line
+            if validation:
                 print(f"  {format_validation_line(validation)}")
                 stale = format_stale_files_line(validation)
                 if stale:
                     print(stale)
-            except Exception as e:
-                logger.debug(f"Validation check failed: {e}")
 
         return 0
     except Exception as e:
@@ -958,7 +957,7 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
 # ---------------------------------------------------------------------------
 
 def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
-    settings, _, _, SymbolIndex, EmbeddingService, _ = _get_services()
+    settings, _, _, _, _, _ = _get_services()
 
     project_path = _resolve_project_path()
     if not _require_git(project_path):
@@ -967,8 +966,7 @@ def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
     project_id = _get_project_id(project_path)
     try:
         cache_dir = project_path / '.smt' / 'embeddings'
-        symbol_index = SymbolIndex()
-        svc = EmbeddingService(symbol_index, cache_dir=cache_dir)
+        svc = _get_embedding_service(cache_dir)
 
         if not svc.load_index():
             from src.graph.neo4j_client import Neo4jClient
