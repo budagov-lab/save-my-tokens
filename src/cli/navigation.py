@@ -1,0 +1,273 @@
+"""SMT navigation commands: list, path, scope."""
+
+from pathlib import Path
+from typing import Optional
+
+from src.cli._helpers import (
+    _get_neo4j_client,
+    _get_project_id,
+    _require_git,
+    _resolve_project_path,
+)
+
+
+def cmd_list(module: Optional[str] = None, type_filter: Optional[str] = None, limit: int = 0) -> int:
+    """Enumerate all symbols in the graph, optionally filtered by file/module path and type."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    label_filter = type_filter.capitalize() if type_filter else None
+
+    try:
+        client = _get_neo4j_client(_get_project_id(project_path))
+        pid = client.project_id
+
+        with client.driver.session() as session:
+            conditions = ["NOT n:Commit", "n.file IS NOT NULL"]
+            params: dict = {"pid": pid}
+            if module:
+                conditions.append("n.file CONTAINS $module")
+                params["module"] = module
+            if label_filter:
+                conditions.append(f"n:{label_filter}")
+
+            where_clause = " AND ".join(conditions)
+            query = f"""
+                MATCH (n {{project_id: $pid}})
+                WHERE {where_clause}
+                RETURN n.name AS name, n.file AS file, n.line AS line,
+                       labels(n)[0] AS type
+                ORDER BY n.file, n.line
+            """
+            rows = session.run(query, **params).data()
+
+        if not rows:
+            filters = []
+            if module:
+                filters.append(f"module={module!r}")
+            if label_filter:
+                filters.append(f"type={label_filter}")
+            suffix = f" ({', '.join(filters)})" if filters else ""
+            print(f"No symbols found{suffix}.")
+            return 0
+
+        total = len(rows)
+        if limit and limit < total:
+            rows = rows[:limit]
+
+        from collections import defaultdict
+        by_file: dict = defaultdict(list)
+        for row in rows:
+            by_file[row['file'] or '(unknown)'].append(row)
+
+        filter_parts = []
+        if module:
+            filter_parts.append(f"module: {module!r}")
+        if label_filter:
+            filter_parts.append(f"type: {label_filter}")
+        filter_note = f"  ({', '.join(filter_parts)})" if filter_parts else ""
+        shown = f", showing first {limit}" if limit and limit < total else ""
+        print(f"\n{total} symbols across {len(by_file)} files{filter_note}{shown}\n")
+
+        for file_path in sorted(by_file):
+            symbols = by_file[file_path]
+            try:
+                display = str(Path(file_path).relative_to(project_path))
+            except ValueError:
+                display = file_path
+            print(f"  {display}  ({len(symbols)} symbols)")
+            for sym in symbols:
+                line_str = f":{sym['line']}" if sym['line'] else ""
+                print(f"    {sym['name']:<40} [{sym['type']}]{line_str}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
+def cmd_path(symbol_a: str, symbol_b: str) -> int:
+    """Shortest dependency path between two symbols."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    try:
+        client = _get_neo4j_client(_get_project_id(project_path))
+        pid = client.project_id
+
+        with client.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (a {name: $a, project_id: $pid}), (b {name: $b, project_id: $pid})
+                MATCH path = shortestPath((a)-[:CALLS*]->(b))
+                RETURN [node IN nodes(path) | node.name] AS path_names,
+                       [node IN nodes(path) | node.file] AS path_files,
+                       length(path) AS hops
+                LIMIT 1
+                """,
+                a=symbol_a, b=symbol_b, pid=pid
+            ).single()
+
+        if not result:
+            with client.driver.session() as session:
+                a_cnt = session.run(
+                    "MATCH (n {name: $name, project_id: $pid}) RETURN count(n) AS cnt",
+                    name=symbol_a, pid=pid
+                ).single()['cnt']
+                b_cnt = session.run(
+                    "MATCH (n {name: $name, project_id: $pid}) RETURN count(n) AS cnt",
+                    name=symbol_b, pid=pid
+                ).single()['cnt']
+
+            if a_cnt == 0:
+                print(f"Symbol '{symbol_a}' not found in graph.")
+            elif b_cnt == 0:
+                print(f"Symbol '{symbol_b}' not found in graph.")
+            else:
+                print(f"No dependency path found: {symbol_a} → {symbol_b}")
+                print("  (no CALLS chain exists between these symbols in this direction)")
+            return 1
+
+        hops = result['hops']
+        path_names = result['path_names']
+        path_files = result['path_files']
+
+        print(f"\nShortest path: {symbol_a} → {symbol_b}  ({hops} hop{'s' if hops != 1 else ''})\n")
+        for i, (name, fpath) in enumerate(zip(path_names, path_files)):
+            file_base = Path(fpath or '?').name
+            arrow = "  →  " if i < len(path_names) - 1 else ""
+            print(f"  [{i}] {name}  ({file_base}){arrow}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
+def cmd_scope(file_filter: str) -> int:
+    """File-level surface analysis: exports, imports, internal symbols."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    try:
+        client = _get_neo4j_client(_get_project_id(project_path))
+        pid = client.project_id
+
+        with client.driver.session() as session:
+            file_rows = session.run(
+                """
+                MATCH (n {project_id: $pid})
+                WHERE n.file IS NOT NULL AND n.file CONTAINS $filter AND NOT n:Commit
+                RETURN DISTINCT n.file AS file ORDER BY n.file
+                """,
+                pid=pid, filter=file_filter
+            ).data()
+
+        if not file_rows:
+            print(f"No symbols found for file filter: {file_filter!r}")
+            return 1
+
+        if len(file_rows) > 1:
+            print(f"Multiple files match {file_filter!r} — be more specific:\n")
+            for r in file_rows[:10]:
+                try:
+                    print(f"  {Path(r['file']).relative_to(project_path)}")
+                except ValueError:
+                    print(f"  {r['file']}")
+            return 1
+
+        file_abs = file_rows[0]['file']
+        try:
+            display = str(Path(file_abs).relative_to(project_path))
+        except ValueError:
+            display = file_abs
+
+        with client.driver.session() as session:
+            all_syms = session.run(
+                """
+                MATCH (n {project_id: $pid})
+                WHERE n.file = $file AND NOT n:Commit
+                RETURN n.name AS name, n.line AS line, labels(n)[0] AS type
+                ORDER BY n.line
+                """,
+                pid=pid, file=file_abs
+            ).data()
+
+            exports = session.run(
+                """
+                MATCH (caller {project_id: $pid})-[:CALLS]->(n {project_id: $pid})
+                WHERE n.file = $file AND caller.file <> $file
+                RETURN n.name AS name, n.line AS line, labels(n)[0] AS type,
+                       n.docstring AS docstring,
+                       count(DISTINCT caller) AS external_callers,
+                       collect(DISTINCT caller.file)[..3] AS sample_files
+                ORDER BY external_callers DESC
+                """,
+                pid=pid, file=file_abs
+            ).data()
+
+            imports = session.run(
+                """
+                MATCH (n {project_id: $pid})-[:CALLS]->(dep {project_id: $pid})
+                WHERE n.file = $file AND dep.file <> $file
+                RETURN dep.name AS name, dep.file AS dep_file,
+                       labels(dep)[0] AS type,
+                       count(DISTINCT n) AS usage_count
+                ORDER BY dep.file, dep.name
+                """,
+                pid=pid, file=file_abs
+            ).data()
+
+        exported_names = {r['name'] for r in exports}
+        imported_names = {r['name'] for r in imports}
+        internal_syms = [
+            s for s in all_syms
+            if s['name'] not in exported_names and s['name'] not in imported_names
+        ]
+
+        print(f"\nScope: {display}\n")
+        print(f"  {len(all_syms)} symbols total  |  "
+              f"{len(exports)} exported  |  "
+              f"{len(imports)} imported  |  "
+              f"{len(internal_syms)} internal\n")
+
+        if exports:
+            print(f"  exports — called by other files ({len(exports)}):")
+            for r in exports:
+                caller_files = [Path(f).name for f in (r.get('sample_files') or [])]
+                suffix = (f"  <- {r['external_callers']} caller{'s' if r['external_callers'] != 1 else ''}"
+                          f" ({', '.join(caller_files[:2])}{'...' if len(caller_files) > 2 else ''})")
+                doc = r.get('docstring') or ''
+                doc_line = doc.splitlines()[0].strip()[:60] if doc else ''
+                doc_suffix = f"  # {doc_line}" if doc_line else ""
+                print(f"    {r['name']:<45} [{r['type']}]{suffix}{doc_suffix}")
+
+        if imports:
+            from collections import defaultdict
+            by_src: dict = defaultdict(list)
+            for r in imports:
+                by_src[r['dep_file']].append(r)
+            print(f"\n  imports — calls into other files ({len(imports)} symbols from {len(by_src)} files):")
+            for dep_file in sorted(by_src):
+                deps = by_src[dep_file]
+                try:
+                    dep_display = str(Path(dep_file).relative_to(project_path))
+                except ValueError:
+                    dep_display = Path(dep_file).name
+                print(f"    from {dep_display}:")
+                for dep in deps:
+                    print(f"      {dep['name']}  [{dep['type']}]")
+
+        if internal_syms:
+            print(f"\n  internal — not directly coupled across files ({len(internal_syms)}):")
+            for sym in internal_syms:
+                line_str = f":{sym['line']}" if sym['line'] else ""
+                print(f"    {sym['name']:<45} [{sym['type']}]{line_str}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
