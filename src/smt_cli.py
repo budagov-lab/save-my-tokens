@@ -78,6 +78,7 @@ from src.cli._helpers import (
     _C,
     _close_neo4j_client,
     _ensure_smtignore,
+    _fail,
     _get_default_depth,
     _get_engine,
     _get_embedding_service,
@@ -86,8 +87,10 @@ from src.cli._helpers import (
     _get_services,
     _get_validation,
     _git_initial_commit,
+    _ok,
     _require_git,
     _resolve_project_path,
+    _warn,
 )
 from src.cli.analysis import (
     cmd_bottleneck,
@@ -115,64 +118,7 @@ from src.cli.docker import cmd_docker
 from src.cli.config import cmd_config
 from src.cli.status import cmd_status
 
-
-# ---------------------------------------------------------------------------
-# build
-# ---------------------------------------------------------------------------
-
-def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str] = None) -> int:
-    settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, _ = _get_services()
-
-    if check:
-        return cmd_status()
-
-    if target_dir:
-        target_path = Path(target_dir).resolve()
-    else:
-        cwd = Path.cwd()
-        smt_config_file = cwd / '.claude' / '.smt_config'
-
-        if smt_config_file.exists():
-            try:
-                with open(smt_config_file, 'r', encoding='utf-8') as f:
-                    smt_config = json.load(f)
-                    target_path = Path(smt_config['project_dir']).resolve()
-            except (json.JSONDecodeError, KeyError, FileNotFoundError):
-                target_path = cwd
-        else:
-            target_path = cwd
-
-    if not _require_git(target_path):
-        return 1
-
-    _ensure_smtignore(target_path)
-
-    src_dir = target_path
-
-    print(f"{'Rebuilding' if clear else 'Building'} graph from {src_dir} ...")
-
-    try:
-        from loguru import logger
-        project_id = _get_project_id(target_path)
-        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, project_id=project_id)
-
-        if clear:
-            print(f"{Colors.YELLOW}[WARN]{Colors.RESET} Clearing graph data for project: {target_path.name} [{project_id}]")
-            client.clear_database()
-            import shutil
-            embeddings_dir = target_path / '.smt' / 'embeddings'
-            if embeddings_dir.exists():
-                shutil.rmtree(embeddings_dir)
-                logger.info(f"Cleared embeddings cache: {embeddings_dir}")
-
-        builder = GraphBuilder(str(src_dir), neo4j_client=client, project_id=project_id)
-        builder.build()
-        client.driver.close()
-        print(f"Done. (project: {target_path.name} [{project_id}])")
-        return cmd_status()
-    except Exception as e:
-        print(f"ERROR: {e}")
-        return 1
+from src.cli.build import cmd_build
 
 
 # ---------------------------------------------------------------------------
@@ -795,221 +741,8 @@ def cmd_explain(symbol: str, depth: int = 2) -> int:
     print("         and what to be aware of before modifying it.")
     return 0
 
-
-# ---------------------------------------------------------------------------
-# sync
-# ---------------------------------------------------------------------------
-
-def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = None) -> int:
-    settings, Neo4jClient, _, SymbolIndex, EmbeddingService, IncrementalSymbolUpdater = _get_services()
-
-    try:
-        target_path = Path(target_dir).resolve() if target_dir else _resolve_project_path()
-
-        if not (target_path / '.git').exists():
-            print(f"ERROR: No .git directory found in {target_path}")
-            return 1
-
-        from loguru import logger
-
-        project_id = _get_project_id(target_path)
-        client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, project_id=project_id)
-
-        index = SymbolIndex()
-
-        cache_dir = target_path / '.smt' / 'embeddings'
-        embedding_svc = EmbeddingService(index, cache_dir=cache_dir)
-
-        updater = IncrementalSymbolUpdater(
-            symbol_index=index,
-            neo4j_client=client,
-            embedding_service=embedding_svc,
-            base_path=str(target_path),
-        )
-
-        # Guard: single-commit repo — nothing to diff, but record HEAD so validator shows fresh.
-        if commit_range == 'HEAD~1..HEAD':
-            count_result = subprocess.run(
-                ['git', 'rev-list', '--count', 'HEAD'],
-                cwd=str(target_path), capture_output=True, text=True,
-            )
-            if count_result.returncode == 0 and count_result.stdout.strip() == '1':
-                try:
-                    commit_meta = updater._get_commit_metadata('HEAD', str(target_path))
-                    client.create_commit_node(commit_meta)
-                    print("✓ Graph marked fresh (single-commit repository)")
-                except Exception as e:
-                    logger.warning(f"Could not record HEAD commit: {e}")
-                    print("Nothing to sync — repository has only one commit.")
-                client.driver.close()
-                return cmd_status()
-
-        success = updater.update_from_git(commit_range, repo_path=str(target_path))
-        client.driver.close()
-
-        if success:
-            print("✓ Graph synced successfully")
-            result = cmd_status()
-            return result
-        else:
-            print("✗ Graph sync failed — try: smt build --clear")
-            return 1
-
-    except Exception as e:
-        logger.debug("cmd_sync error", exc_info=True)
-        print(f"ERROR: {e}")
-        return 1
-
-
-# ---------------------------------------------------------------------------
-# onboard
-# ---------------------------------------------------------------------------
-
-def cmd_onboard(action: str, target_dir: Optional[Path] = None) -> int:
-    """Guided onboarding: setup, orientation, or health check."""
-
-    if action == 'project':
-        target = (target_dir or Path.cwd()).resolve()
-        print(f"\n{_C.BOLD}SMT Project Onboarding: {target.name}{_C.RESET}\n")
-
-        print("Step 1/3  Starting Neo4j...")
-        rc = cmd_docker('up')
-        if rc != 0:
-            _fail("docker up failed — is Docker Desktop running?")
-            print("  Fix: start Docker Desktop, then re-run: smt onboard project")
-            return 1
-        _ok("Neo4j is ready")
-
-        print("\nStep 2/3  Building graph from source...")
-        result = cmd_build(check=False, clear=False, target_dir=str(target))
-        if result != 0:
-            _fail("Graph build failed — check error above")
-            return 1
-
-        print("\nStep 3/3  Verifying graph health...")
-        result = cmd_status()
-        if result != 0:
-            _fail("Status check failed")
-            return 1
-
-        print(f"\n{_C.GREEN}{_C.BOLD}Onboarding complete!{_C.RESET}")
-        print("\nNext steps:")
-        print("  smt context <SymbolName>   — explore a symbol's dependencies")
-        print("  smt search \"your query\"    — semantic search by meaning")
-        print("  smt impact <SymbolName>    — see what breaks if you change this")
-        print("  smt status                 — check graph health")
-        return 0
-
-    elif action == 'agent':
-        orientation = f"""\
-
-{_C.BOLD}SMT AGENT ORIENTATION{_C.RESET}
-save-my-tokens (SMT) exposes a semantic Neo4j graph of this codebase.
-Use it instead of reading raw files.
-
-{_C.BOLD}QUERY DECISION TABLE{_C.RESET}
-Goal                          | Command
-------------------------------|------------------------------------------
-Understand what a symbol does | smt context <symbol>
-See dependencies (2+ hops)    | smt context <symbol> --depth 2
-See who calls a function      | smt context <symbol> --callers
-Find code by topic/meaning    | smt search "description"
-What breaks if I change this  | smt impact <symbol>
-Check graph health            | smt status
-Build graph from source       | smt build
-Sync after recent commits     | smt sync HEAD~1..HEAD
-Start Neo4j                   | smt start
-
-{_C.BOLD}TOOL HIERARCHY (use in order){_C.RESET}
-  Tier 1 (first)   — smt context / smt search / smt impact
-  Tier 2 (verify)  — Grep, Glob
-  Tier 3 (inspect) — Read (only after SMT locates the file)
-  Tier 4 (avoid)   — Bash find/grep for exploration
-
-{_C.BOLD}SESSION START CHECKLIST{_C.RESET}
-  smt status   → node count > 0? Graph is ready.
-  smt build    → if empty, build from src/
-  smt sync     → if stale, sync after recent commits
-
-{_C.BOLD}SKILLS FILES (in .claude/skills/){_C.RESET}
-  agent-query-guide.md    — full decision tree
-  graph-maintenance.md    — how to keep graph fresh
-  project-onboarding.md   — setup guide for first-time users
-"""
-        print(orientation)
-        return 0
-
-    elif action == 'check':
-        print(f"\n{_C.BOLD}SMT Health Check{_C.RESET}\n")
-        exit_code = 0
-
-        import urllib.request
-        try:
-            urllib.request.urlopen('http://localhost:7474', timeout=3)
-            _ok("Neo4j reachable (http://localhost:7474)")
-            neo4j_up = True
-        except Exception:
-            _fail("Neo4j not reachable — run: smt start")
-            neo4j_up = False
-            exit_code = 1
-
-        if neo4j_up:
-            try:
-                client = _get_neo4j_client()
-                with client.driver.session() as session:
-                    result = session.run("MATCH (n) RETURN count(n) AS cnt")
-                    total = result.single()['cnt']
-                if total > 0:
-                    _ok(f"Graph has {total} nodes")
-                else:
-                    _warn("Graph is empty — run: smt build")
-                    exit_code = 1
-            except Exception as e:
-                _warn(f"Graph query failed: {str(e)[:80]}")
-                exit_code = 1
-        else:
-            _warn("Graph check skipped (Neo4j not running)")
-
-        if neo4j_up:
-            try:
-                from src.graph.validator import validate_graph
-                client = _get_neo4j_client()
-                repo_path = (target_dir or Path.cwd()).resolve()
-                v = validate_graph(client, repo_path)
-                if v.is_fresh:
-                    _ok(f"Graph is fresh (HEAD: {v.git_head})")
-                else:
-                    _warn(f"Graph is {v.commits_behind} commit(s) behind — run: smt sync")
-            except Exception as e:
-                _warn(f"Staleness check skipped: {str(e)[:80]}")
-
-        try:
-            result = subprocess.run(
-                [sys.executable, '-c', 'from sentence_transformers import SentenceTransformer'],
-                capture_output=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                _ok("sentence_transformers importable")
-            else:
-                _warn("sentence_transformers not importable — semantic search disabled")
-        except Exception:
-            _warn("sentence_transformers check timed out")
-
-        skills_dir = Path('.claude/skills')
-        if skills_dir.exists() and any(skills_dir.glob('*.md')):
-            skill_count = len(list(skills_dir.glob('*.md')))
-            _ok(f".claude/skills/ has {skill_count} skill file(s)")
-        else:
-            _warn(".claude/skills/ missing or empty — run: smt setup --dir .")
-
-        print()
-        return exit_code
-
-    else:
-        print(f"Unknown onboard action: {action}")
-        print("Usage: smt onboard project|agent|check [--dir PATH]")
-        return 1
+from src.cli.sync import cmd_sync
+from src.cli.onboard import cmd_onboard
 
 
 # ---------------------------------------------------------------------------
