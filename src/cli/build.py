@@ -1,6 +1,5 @@
 """SMT build command: parse source and persist graph to Neo4j."""
 
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +12,7 @@ from src.cli._helpers import (
     _get_project_id,
     _get_services,
     _require_git,
+    _resolve_project_path,
 )
 
 
@@ -27,17 +27,7 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str
     if target_dir:
         target_path = Path(target_dir).resolve()
     else:
-        cwd = Path.cwd()
-        smt_config_file = cwd / '.claude' / '.smt_config'
-        if smt_config_file.exists():
-            try:
-                with open(smt_config_file, 'r', encoding='utf-8') as f:
-                    smt_config = json.load(f)
-                    target_path = Path(smt_config['project_dir']).resolve()
-            except (json.JSONDecodeError, KeyError, FileNotFoundError):
-                target_path = cwd
-        else:
-            target_path = cwd
+        target_path = _resolve_project_path()
 
     if not _require_git(target_path):
         return 1

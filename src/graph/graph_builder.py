@@ -403,7 +403,7 @@ class GraphBuilder:
             logger.info("Building embeddings and FAISS index for semantic search...")
 
             # Create embedding service
-            cache_dir = Path(self.base_path).parent / '.smt' / 'embeddings'
+            cache_dir = Path(self.base_path) / '.smt' / 'embeddings'
             svc = EmbeddingService(self.symbol_index, cache_dir=cache_dir)
 
             # Build the FAISS index (generates embeddings for all symbols)

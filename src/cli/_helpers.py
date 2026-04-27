@@ -131,21 +131,17 @@ def _get_services() -> Any:
 # ---------------------------------------------------------------------------
 
 def _resolve_project_path() -> Path:
-    """Resolve project path from .smt_config or cwd. Result cached for the process lifetime."""
+    """Walk up from cwd looking for .smt/config.json (like git). Falls back to cwd."""
     global _project_path_cache
     if _project_path_cache is not None:
         return _project_path_cache
-    cwd = Path.cwd()
-    smt_config_file = cwd / '.claude' / '.smt_config'
-    if smt_config_file.exists():
-        try:
-            with open(smt_config_file, 'r', encoding='utf-8') as f:
-                smt_config = json.load(f)
-                _project_path_cache = Path(smt_config['project_dir']).resolve()
-                return _project_path_cache
-        except (json.JSONDecodeError, KeyError, FileNotFoundError):
-            pass
-    _project_path_cache = cwd
+    search = Path.cwd()
+    for candidate in [search, *search.parents]:
+        cfg = candidate / '.smt' / 'config.json'
+        if cfg.exists():
+            _project_path_cache = candidate.resolve()
+            return _project_path_cache
+    _project_path_cache = search
     return _project_path_cache
 
 
@@ -162,11 +158,11 @@ def _get_embedding_service(cache_dir: Path) -> Any:
 def _get_default_depth(fallback: int) -> int:
     """Return the configured default query depth, falling back to the hardcoded default.
 
-    Reads ``default_depth`` from .claude/.smt_config (set by ``smt setup`` or edited manually).
+    Reads ``default_depth`` from .smt/config.json (set by ``smt setup`` or edited manually).
     Per-invocation ``--depth N`` always takes precedence — this only fills in the default.
     """
     try:
-        cfg_file = Path.cwd() / '.claude' / '.smt_config'
+        cfg_file = _resolve_project_path() / '.smt' / 'config.json'
         if cfg_file.exists():
             with open(cfg_file, 'r', encoding='utf-8') as f:
                 val = json.load(f).get('default_depth')

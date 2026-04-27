@@ -159,18 +159,19 @@ def cmd_setup(target_dir: Path) -> int:
     print(f"Configuring SMT for: {target_dir}")
 
     # ------------------------------------------------------------------
-    # 0. .claude/.smt_config — store project metadata for CLI
+    # 0. .smt/config.json — project metadata, committed to repo
     # ------------------------------------------------------------------
-    smt_config_file = claude_dir / '.smt_config'
+    smt_dir = target_dir / '.smt'
+    smt_dir.mkdir(parents=True, exist_ok=True)
+    smt_config_file = smt_dir / 'config.json'
     smt_config = {
-        'project_dir': str(target_dir),
         'project_name': target_dir.name,
         'project_id': _get_project_id(target_dir),
         'default_depth': 2,
     }
     with open(smt_config_file, 'w', encoding='utf-8') as f:
         json.dump(smt_config, f, indent=2)
-    print("  .claude/.smt_config    [OK]")
+    print("  .smt/config.json       [OK]")
 
     # ------------------------------------------------------------------
     # 0a. .smtignore
@@ -179,21 +180,21 @@ def cmd_setup(target_dir: Path) -> int:
     print("  .smtignore             [OK]")
 
     # ------------------------------------------------------------------
-    # 0b. .gitignore — ensure .smt/ (embeddings cache) is ignored
+    # 0b. .gitignore — ignore embeddings cache only, not the whole .smt/
     # ------------------------------------------------------------------
     gitignore_file = target_dir / '.gitignore'
-    smt_ignore_entry = '.smt/'
+    smt_ignore_entry = '.smt/embeddings/'
     if gitignore_file.exists():
         content = gitignore_file.read_text(encoding='utf-8')
         if smt_ignore_entry not in content:
             with open(gitignore_file, 'a', encoding='utf-8') as f:
                 f.write(f'\n# SMT embeddings cache\n{smt_ignore_entry}\n')
-            print("  .gitignore             [OK] — added .smt/")
+            print("  .gitignore             [OK] — added .smt/embeddings/")
         else:
-            print("  .gitignore             [OK] — .smt/ already ignored")
+            print("  .gitignore             [OK] — .smt/embeddings/ already ignored")
     else:
         gitignore_file.write_text(f'# SMT embeddings cache\n{smt_ignore_entry}\n', encoding='utf-8')
-        print("  .gitignore             [OK] — created with .smt/")
+        print("  .gitignore             [OK] — created with .smt/embeddings/")
 
     # ------------------------------------------------------------------
     # 1. .claude/settings.json
