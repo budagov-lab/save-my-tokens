@@ -1,5 +1,6 @@
 """Shared state and utilities for SMT CLI sub-modules."""
 
+import functools
 import hashlib
 import json
 import subprocess
@@ -27,6 +28,51 @@ _neo4j_client: Optional[Any] = None
 _validation_cache: Optional[Any] = None
 _project_path_cache: Optional[Path] = None
 _embedding_service_cache: Optional[Any] = None
+_global_config_cache: Optional[dict] = None
+
+# ---------------------------------------------------------------------------
+# Global user config  (~/.smt/config.json)
+# ---------------------------------------------------------------------------
+
+_GLOBAL_SMT_DIR = Path.home() / '.smt'
+_GLOBAL_CONFIG_FILE = _GLOBAL_SMT_DIR / 'config.json'
+
+_GLOBAL_CONFIG_SCHEMA: dict = {
+    'models_dir':    {'type': 'path',  'default': None,  'desc': 'Shared model cache directory (e.g. ~/.smt/models)'},
+    'default_depth': {'type': 'int',   'default': None,  'desc': 'Default query depth, 1–10'},
+    'compact':       {'type': 'bool',  'default': False, 'desc': 'Compact output format by default'},
+    'brief':         {'type': 'bool',  'default': False, 'desc': 'Suppress docstrings by default'},
+}
+
+
+def _read_global_config() -> dict:
+    """Read ~/.smt/config.json. Cached per process; returns {} on any error."""
+    global _global_config_cache
+    if _global_config_cache is not None:
+        return _global_config_cache
+    try:
+        if _GLOBAL_CONFIG_FILE.exists():
+            with open(_GLOBAL_CONFIG_FILE, 'r', encoding='utf-8') as f:
+                _global_config_cache = json.load(f)
+                return _global_config_cache
+    except Exception:
+        pass
+    _global_config_cache = {}
+    return _global_config_cache
+
+
+def _write_global_config(key: str, value: Any) -> None:
+    """Persist one key to ~/.smt/config.json, creating the file if needed."""
+    global _global_config_cache
+    _GLOBAL_SMT_DIR.mkdir(parents=True, exist_ok=True)
+    cfg = dict(_read_global_config())
+    if value is None:
+        cfg.pop(key, None)
+    else:
+        cfg[key] = value
+    with open(_GLOBAL_CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, indent=2)
+    _global_config_cache = cfg
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +95,7 @@ def _warn(msg: str) -> None:
 # Project identity
 # ---------------------------------------------------------------------------
 
+@functools.lru_cache(maxsize=8)
 def _get_project_id(project_root: Path) -> str:
     """Derive a stable 12-char project ID from the project root path."""
     return hashlib.sha256(str(project_root.resolve()).encode()).hexdigest()[:12]
@@ -149,18 +196,30 @@ def _get_embedding_service(cache_dir: Path) -> Any:
     """Get or create singleton EmbeddingService (model loaded once per process)."""
     global _embedding_service_cache
     if _embedding_service_cache is None:
+        import os
         from src.parsers.symbol_index import SymbolIndex
-        from src.embeddings.embedding_service import EmbeddingService
-        _embedding_service_cache = EmbeddingService(SymbolIndex(), cache_dir=cache_dir)
+
+        # sentence_transformers sets up tqdm at import time, so TQDM_DISABLE must be
+        # set BEFORE the import to suppress the "Loading weights" progress bar.
+        _global_models = _read_global_config().get('models_dir')
+        _models_dir = Path(_global_models).expanduser().resolve() if _global_models else cache_dir / "models"
+        _model_cached = _models_dir.exists() and any(_models_dir.glob("models--*"))
+        _prev_tqdm = os.environ.get("TQDM_DISABLE")
+        if _model_cached:
+            os.environ["TQDM_DISABLE"] = "1"
+        try:
+            from src.embeddings.embedding_service import EmbeddingService
+            _embedding_service_cache = EmbeddingService(SymbolIndex(), cache_dir=cache_dir, models_dir=_models_dir)
+        finally:
+            if _prev_tqdm is None:
+                os.environ.pop("TQDM_DISABLE", None)
+            else:
+                os.environ["TQDM_DISABLE"] = _prev_tqdm
     return _embedding_service_cache
 
 
 def _get_default_depth(fallback: int) -> int:
-    """Return the configured default query depth, falling back to the hardcoded default.
-
-    Reads ``default_depth`` from .smt/config.json (set by ``smt setup`` or edited manually).
-    Per-invocation ``--depth N`` always takes precedence — this only fills in the default.
-    """
+    """Return default query depth. Priority: project config > global config > fallback."""
     try:
         cfg_file = _resolve_project_path() / '.smt' / 'config.json'
         if cfg_file.exists():
@@ -170,7 +229,20 @@ def _get_default_depth(fallback: int) -> int:
                 return val
     except Exception:
         pass
+    val = _read_global_config().get('default_depth')
+    if isinstance(val, int) and 1 <= val <= 10:
+        return val
     return fallback
+
+
+def _get_default_compact() -> bool:
+    """Return global compact preference (CLI flag always overrides)."""
+    return bool(_read_global_config().get('compact', False))
+
+
+def _get_default_brief() -> bool:
+    """Return global brief preference (CLI flag always overrides)."""
+    return bool(_read_global_config().get('brief', False))
 
 
 # ---------------------------------------------------------------------------

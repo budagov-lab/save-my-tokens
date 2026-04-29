@@ -80,6 +80,8 @@ from src.cli._helpers import (
     _ensure_smtignore,
     _fail,
     _get_default_depth,
+    _get_default_compact,
+    _get_default_brief,
     _get_engine,
     _get_embedding_service,
     _get_neo4j_client,
@@ -321,8 +323,14 @@ graph analysis:
 
     args = parser.parse_args()
 
-    # In agent mode: default compact + brief on every query (saves 40-60% tokens).
-    # Explicit --no-compact / --no-brief flags are not wired, so this is unconditional.
+    # Apply global preferences for compact/brief (CLI flag wins — only set if not already true).
+    if not os.environ.get("SMT_AGENT"):
+        if hasattr(args, 'compact') and not args.compact:
+            args.compact = _get_default_compact()
+        if hasattr(args, 'brief') and not args.brief:
+            args.brief = _get_default_brief()
+
+    # In agent mode: force compact + brief unconditionally (saves 40-60% tokens).
     if os.environ.get("SMT_AGENT"):
         for _flag in ("compact", "brief"):
             if hasattr(args, _flag) and not getattr(args, _flag):

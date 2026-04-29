@@ -7,14 +7,13 @@ from src.cli._helpers import (
     _get_embedding_service,
     _get_project_id,
     _get_neo4j_client,
-    _get_services,
     _require_git,
     _resolve_project_path,
 )
 
 
 def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
-    settings, _, _, _, _, _ = _get_services()
+    from src.config import settings
 
     project_path = _resolve_project_path()
     if not _require_git(project_path):

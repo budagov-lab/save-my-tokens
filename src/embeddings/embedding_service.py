@@ -53,7 +53,7 @@ class EmbeddingService:
     # SentenceTransformers model - all-MiniLM-L6-v2 is small (22MB) and fast
     EMBEDDING_DIM = 384  # all-MiniLM-L6-v2 produces 384-dim vectors
 
-    def __init__(self, symbol_index: SymbolIndex, cache_dir: Optional[Path] = None):
+    def __init__(self, symbol_index: SymbolIndex, cache_dir: Optional[Path] = None, models_dir: Optional[Path] = None):
         """Initialize embedding service.
 
         Args:
@@ -64,15 +64,43 @@ class EmbeddingService:
         self.cache_dir = cache_dir or settings.DATA_DIR
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Model weights stored alongside the FAISS index so they're never re-downloaded
-        models_dir = self.cache_dir / "models"
+        # Model weights: use caller-supplied dir (global cache) or fall back to per-project.
+        models_dir = (models_dir or self.cache_dir / "models").resolve()
         models_dir.mkdir(parents=True, exist_ok=True)
+
+        # Detect whether the model is already on disk so we can skip the HF Hub
+        # network check (avoids the unauthenticated-request warning and the latency).
+        # HF Hub stores models as "models--{org}--{name}" regardless of whether the
+        # model_id includes an org prefix (e.g. "all-MiniLM-L6-v2" →
+        # "models--sentence-transformers--all-MiniLM-L6-v2"), so use a glob.
+        _model_cached = models_dir.exists() and any(models_dir.glob("models--*"))
 
         # Initialize SentenceTransformer model
         self.embedding_model = None
         if SentenceTransformer:
             try:
-                self.embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL, cache_folder=str(models_dir))
+                import os as _os
+                _tqdm_prev = _os.environ.get("TQDM_DISABLE")
+                if _model_cached:
+                    # Suppress safetensors/tqdm "Loading weights" bar and transformers
+                    # verbosity — they're noise when loading from local disk cache.
+                    _os.environ["TQDM_DISABLE"] = "1"
+                    try:
+                        import transformers
+                        transformers.logging.set_verbosity_error()
+                    except Exception:
+                        pass
+                try:
+                    self.embedding_model = SentenceTransformer(
+                        settings.EMBEDDING_MODEL,
+                        cache_folder=str(models_dir),
+                        local_files_only=_model_cached,
+                    )
+                finally:
+                    if _tqdm_prev is None:
+                        _os.environ.pop("TQDM_DISABLE", None)
+                    else:
+                        _os.environ["TQDM_DISABLE"] = _tqdm_prev
                 logger.info(f"Loaded embedding model: {settings.EMBEDDING_MODEL}")
             except Exception as e:
                 error_msg = str(e)
