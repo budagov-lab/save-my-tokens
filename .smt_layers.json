@@ -1,0 +1,57 @@
+{
+  "_comment": "Layers are ordered from highest (index 0) to lowest (last index). A layer may only call downward (higher index). Edit 'paths' to match your project layout \u2014 use file path substrings. Add 'allowlist' entries for intentional cross-layer dependencies.",
+  "layers": [
+    {
+      "name": "cli",
+      "paths": [
+        "cli/",
+        "cmd/",
+        "main.py",
+        "_cli.py"
+      ]
+    },
+    {
+      "name": "api",
+      "paths": [
+        "api/",
+        "routes/",
+        "views/",
+        "handlers/"
+      ]
+    },
+    {
+      "name": "services",
+      "paths": [
+        "services/",
+        "usecases/",
+        "application/"
+      ]
+    },
+    {
+      "name": "domain",
+      "paths": [
+        "domain/",
+        "models/",
+        "entities/"
+      ]
+    },
+    {
+      "name": "infra",
+      "paths": [
+        "db/",
+        "repo",
+        "storage/",
+        "clients/"
+      ]
+    },
+    {
+      "name": "config",
+      "paths": [
+        "config.py",
+        "settings.py",
+        "config/"
+      ]
+    }
+  ],
+  "allowlist": []
+}
