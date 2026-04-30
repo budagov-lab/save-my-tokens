@@ -17,7 +17,7 @@ from src.agents.models import (
 from src.embeddings.embedding_service import EmbeddingService
 from src.graph.compressor import compress_subgraph
 from src.graph.cycle_detector import detect_cycles
-from src.graph.neo4j_client import Neo4jClient
+from src.graph.neo4j_client import Neo4jClient, compute_depths
 from src.graph.validator import validate_graph
 from src.parsers.symbol_index import SymbolIndex
 
@@ -339,43 +339,25 @@ class SMTQueryEngine:
             edge_tuples = [(e["src"], e["dst"]) for e in edges]
             acyclic_nodes, cycle_groups = detect_cycles(node_names, edge_tuples)
 
+            node_depths = compute_depths(symbol, [(e["src"], e["dst"]) for e in edges])
             callers_by_depth: Dict[int, List[Dict[str, Any]]] = {}
-            visited = {symbol}
-            current_frontier = [symbol]
-            current_depth = 1
-
-            while current_frontier and current_depth <= depth:
-                next_frontier = []
-                callers_at_depth = []
-
-                for caller in current_frontier:
-                    for edge in edges:
-                        if edge["dst"] == caller and edge["src"] not in visited:
-                            visited.add(edge["src"])
-                            next_frontier.append(edge["src"])
-                            node_details = next(
-                                (n for n in nodes if n["name"] == edge["src"]),
-                                None,
-                            )
-                            if node_details:
-                                callers_at_depth.append({
-                                    "name": node_details["name"],
-                                    "file": node_details["file"],
-                                    "line": node_details["line"],
-                                })
-
-                if callers_at_depth:
-                    callers_by_depth[current_depth] = callers_at_depth
-
-                current_frontier = next_frontier
-                current_depth += 1
+            for n in nodes:
+                node_name = n["name"]
+                if node_name != symbol:
+                    d = node_depths.get(node_name)
+                    if d is not None:
+                        callers_by_depth.setdefault(d, []).append({
+                            "name": n["name"],
+                            "file": n["file"],
+                            "line": n["line"],
+                        })
 
             result_dict = {
                 "found": True,
                 "symbol": symbol,
                 "root": root,
                 "callers_by_depth": callers_by_depth,
-                "total_callers": len(visited) - 1,
+                "total_callers": sum(len(v) for v in callers_by_depth.values()),
                 "cycles": [
                     {"members": cg.members, "representative": cg.representative}
                     for cg in cycle_groups

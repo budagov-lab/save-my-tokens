@@ -13,31 +13,7 @@ from src.cli._helpers import (
     _require_git,
     _resolve_project_path,
 )
-
-
-def _compute_depths(
-    root: str, edges: list[tuple[str, str]]
-) -> dict[str, int]:
-    """Compute depth of each node from root via reverse BFS over edges."""
-    reverse_edges: dict[str, list[str]] = {}
-    for src, dst in edges:
-        if dst not in reverse_edges:
-            reverse_edges[dst] = []
-        reverse_edges[dst].append(src)
-
-    depths = {root: 0}
-    queue = [(root, 0)]
-    visited = {root}
-
-    while queue:
-        node, depth = queue.pop(0)
-        for caller in reverse_edges.get(node, []):
-            if caller not in visited:
-                visited.add(caller)
-                depths[caller] = depth + 1
-                queue.append((caller, depth + 1))
-
-    return depths
+from src.graph.neo4j_client import compute_depths as _compute_depths
 
 
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False,

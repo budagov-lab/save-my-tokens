@@ -135,9 +135,15 @@ class PythonParser(BaseParser):
         for child in class_node.children:
             if child.type == "block":
                 for stmt in child.children:
-                    if stmt.type == "function_definition":
+                    fn_node = stmt
+                    if stmt.type == "decorated_definition":
+                        fn_node = next(
+                            (c for c in stmt.children if c.type == "function_definition"),
+                            None,
+                        )
+                    if fn_node and fn_node.type == "function_definition":
                         method = self._extract_function(
-                            stmt, source_code, file_path, class_name
+                            fn_node, source_code, file_path, class_name
                         )
                         if method is not None:
                             symbols.append(method)

@@ -1,6 +1,6 @@
 """Tests for the three retrieval modes (definition, context, impact)."""
 
-from src.smt_cli import _compute_depths
+from src.graph.neo4j_client import compute_depths as _compute_depths
 
 
 class TestComputeDepths:

@@ -9,6 +9,7 @@ from src.cli._helpers import (
     _require_git,
     _resolve_project_path,
 )
+from src.incremental.node_manager import query_symbols_in_file
 
 
 def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
@@ -69,7 +70,7 @@ def cmd_watch(target_dir: Optional[str] = None, debounce: float = 2.0) -> int:
         for abs_path in files:
             p = Path(abs_path)
             try:
-                before = updater._query_symbols_in_file(abs_path)
+                before = query_symbols_in_file(updater.neo4j, abs_path)
                 if p.exists():
                     after = updater._parse_file(abs_path)
                 else:

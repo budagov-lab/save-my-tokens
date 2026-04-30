@@ -537,3 +537,35 @@ class Neo4jClient:
         with self.driver.session() as session:
             session.run(cypher, **params)
         logger.debug(f"Created {len(symbol_node_ids)} MODIFIED_BY edges to commit {commit_hash}")
+
+
+def compute_depths(root: str, edges: List[Tuple[str, str]]) -> Dict[str, int]:
+    """Compute depth of each node from root via reverse BFS over CALLS edges.
+
+    Used for grouping impact-analysis callers by distance from the changed symbol.
+    Depth 0 = root, depth 1 = direct callers, depth 2 = callers of callers, etc.
+
+    Args:
+        root: Symbol name at depth 0 (the node being impacted).
+        edges: List of (caller, callee) tuples from the impact graph.
+
+    Returns:
+        Mapping of node name → depth from root.
+    """
+    reverse_edges: Dict[str, List[str]] = {}
+    for src, dst in edges:
+        reverse_edges.setdefault(dst, []).append(src)
+
+    depths: Dict[str, int] = {root: 0}
+    queue = [(root, 0)]
+    visited = {root}
+
+    while queue:
+        node, depth = queue.pop(0)
+        for caller in reverse_edges.get(node, []):
+            if caller not in visited:
+                visited.add(caller)
+                depths[caller] = depth + 1
+                queue.append((caller, depth + 1))
+
+    return depths

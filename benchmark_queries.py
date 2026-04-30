@@ -12,7 +12,7 @@ logging.getLogger("loguru").setLevel(logging.WARNING)
 from src.config import settings
 from src.graph.neo4j_client import Neo4jClient
 from src.graph.cycle_detector import detect_cycles
-from src.smt_cli import _compute_depths
+from src.graph.neo4j_client import compute_depths as _compute_depths
 
 def benchmark_definition(client: Neo4jClient, symbol: str, runs: int = 5) -> dict:
     """Benchmark definition mode."""

@@ -210,28 +210,21 @@ class IncrementalSymbolUpdater:
         with self.neo4j.transaction() as tx:
             # 1. Delete nodes (+ edges via DETACH) for deleted symbols
             for sym_name in delta.deleted:
-                self._delete_symbol_node(tx, delta.file, sym_name)
+                delete_symbol_node(tx, self.neo4j, delta.file, sym_name)
 
             # 2. Add new symbol nodes
             for symbol in delta.added:
-                self._create_symbol_node(tx, symbol)
+                create_symbol_node(tx, self.neo4j, symbol)
 
             # 3. Replace modified symbol nodes (delete old, create new)
             for symbol in delta.modified:
-                self._delete_symbol_node(tx, symbol.file, symbol.name)
-                self._create_symbol_node(tx, symbol)
+                delete_symbol_node(tx, self.neo4j, symbol.file, symbol.name)
+                create_symbol_node(tx, self.neo4j, symbol)
 
         logger.debug(f"Neo4j transaction committed for {delta.file}")
 
     # Maps NodeType.value → Symbol.type (inverse of GraphBuilder._map_symbol_type_to_node_type)
     _LABEL_TO_SYM_TYPE: Dict[str, str] = LABEL_TO_SYM_TYPE
-
-    @staticmethod
-    def _symbol_type_to_label(sym_type: str) -> str:
-        return symbol_type_to_label(sym_type)
-
-    def _query_symbols_in_file(self, file_path: str) -> List[Symbol]:
-        return query_symbols_in_file(self.neo4j, file_path)
 
     def _remove_symbol(self, symbol: Symbol) -> None:
         """Remove symbol from in-memory index.
@@ -244,14 +237,6 @@ class IncrementalSymbolUpdater:
             logger.debug(f"Removed symbol from index: {symbol.qualified_name}")
         else:
             logger.warning(f"Symbol not in index: {symbol.qualified_name}")
-
-    def _delete_symbol_node(self, tx, file_path: str, symbol_name: str) -> None:
-        delete_symbol_node(tx, self.neo4j, file_path, symbol_name)
-
-    def _create_symbol_node(self, tx, symbol: Symbol) -> None:
-        create_symbol_node(tx, self.neo4j, symbol)
-
-    # _update_symbol_node removed — _update_neo4j now does delete + create for modified symbols
 
     def _rollback(self, file_path: str) -> None:
         """Rollback in-memory index to pre-delta state for the given file.
@@ -279,12 +264,6 @@ class IncrementalSymbolUpdater:
         restored = len(self._backup_index["symbols"])
         self._backup_index = None
         logger.info(f"Rolled back {restored} symbols for {file_path}")
-
-    def _run_git(self, args: List[str], cwd: Optional[str] = None) -> str:
-        return run_git(args, cwd or str(self.base_path))
-
-    def _get_commit_metadata(self, ref: str, repo_path: str) -> CommitNode:
-        return get_commit_metadata(ref, repo_path)
 
     def _parse_file(self, abs_path: str) -> List[Symbol]:
         """Parse a file and extract symbols.
@@ -418,7 +397,7 @@ class IncrementalSymbolUpdater:
 
                 # Step 1: Get diff
                 progress.update(task, description="Getting git diff", advance=5)
-                diff_output = self._run_git(["diff", "--name-status", commit_range], cwd=repo_path)
+                diff_output = run_git(["diff", "--name-status", commit_range], repo_path)
                 diff_lines = [line for line in diff_output.strip().split("\n") if line]
 
                 if not diff_lines:
@@ -448,7 +427,7 @@ class IncrementalSymbolUpdater:
                         # Handle deleted files
                         if status == "D":
                             # Query Neo4j for current symbols (the "before" state)
-                            before_symbols = self._query_symbols_in_file(abs_path)
+                            before_symbols = query_symbols_in_file(self.neo4j, abs_path)
                             delta = SymbolDelta(
                                 file=abs_path,
                                 added=[],
@@ -463,7 +442,7 @@ class IncrementalSymbolUpdater:
                             try:
                                 after_symbols = self._parse_file(abs_path)
                                 # Query Neo4j for "before" state (not the empty in-memory index)
-                                before_symbols = self._query_symbols_in_file(abs_path) if status == "M" else []
+                                before_symbols = query_symbols_in_file(self.neo4j, abs_path) if status == "M" else []
 
                                 delta = self._compute_delta(abs_path, before_symbols, after_symbols)
                                 result = self.apply_delta(delta)
@@ -486,7 +465,7 @@ class IncrementalSymbolUpdater:
                 try:
                     # Get the commit at the end of the range
                     commit_ref = commit_range.split("..")[-1] or "HEAD"
-                    commit_meta = self._get_commit_metadata(commit_ref, repo_path)
+                    commit_meta = get_commit_metadata(commit_ref, repo_path)
                     self.neo4j.create_commit_node(commit_meta)
                     logger.debug(f"Created commit node: {commit_meta.short_hash}")
                 except Exception as e:
