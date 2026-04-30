@@ -20,15 +20,24 @@ Most of those tokens don't matter for the question.
 
 ## The Solution
 
-Three commands, each answering one question:
+Four query modes, each answering one question:
 
 ```bash
 smt definition GraphBuilder        # What is this?
 smt context GraphBuilder --depth 2 # What do I need to work on it?
 smt impact Neo4jClient --depth 3   # What breaks if I change it?
+smt view GraphBuilder              # Show me the source lines
 ```
 
 Each returns only the relevant subgraph — bounded by depth, with circular dependencies collapsed.
+
+---
+
+## Requirements
+
+- Python 3.11+ from [python.org](https://python.org) (not Microsoft Store — missing `ensurepip`)
+- Docker (for Neo4j)
+- Git
 
 ---
 
@@ -42,10 +51,11 @@ python install.py
 
 `install.py` creates a venv, installs all dependencies, and starts Neo4j via Docker. First run takes 5–10 minutes (PyTorch is ~2 GB).
 
-Requires Python 3.11+ from [python.org](https://python.org) (not Microsoft Store — missing `ensurepip`) and Docker.
-
 ```bash
-# Point SMT at your codebase and build the graph
+# Guided setup for new users
+smt onboard
+
+# Or manually: point SMT at your codebase and build the graph
 smt build --dir /path/to/your/project
 
 # Verify it worked
@@ -129,113 +139,58 @@ Impact: Neo4jClient  [Class]
 Jump directly to a symbol's source lines without reading the whole file:
 
 ```bash
-smt view GraphBuilder            # symbol source lines only
+smt view GraphBuilder              # symbol source lines only
 smt view GraphBuilder --context 5  # with 5 lines of surrounding context
 ```
 
 ---
 
-## More Commands
+## Commands
 
 ```bash
-# Semantic search (local embeddings, no API calls)
-smt search "cycle detection algorithm"
+# Graph lifecycle
+smt build [--dir PATH] [--check] [--clear]   # build or rebuild the graph
+smt sync [RANGE]                             # incremental update from commits (~10x faster than build)
+smt watch [--dir PATH] [--debounce N]        # auto-sync on file save (nodes only; run smt build to refresh CALLS edges)
+smt status                                   # node/edge counts, git freshness
+smt start                                    # start Neo4j container
+smt stop                                     # stop Neo4j container
 
-# Sync graph after commits (incremental, ~10x faster than full rebuild)
-smt sync                         # default: HEAD~1..HEAD
-smt sync main..feature-branch    # custom range
-
-# Enumerate symbols
-smt list --module src/parsers    # all symbols in a path
-smt scope graph_builder          # file exports, imports, internal symbols
-smt unused                       # dead code candidates
-
-# Architecture analysis
-smt cycles                       # circular dependencies
-smt hot --top 10                 # most-called symbols (coupling hotspots)
-smt complexity --top 10          # fan-in × fan-out god functions
-smt bottleneck --top 5           # cross-file bridge symbols
-smt modules                      # files ranked by coupling
-smt path A B                     # shortest call path between two symbols
-
-# Breaking change detection
-smt breaking-changes MyFunction  # compare HEAD~1..HEAD
-smt breaking-changes MyFunction --before v1.0 --after v1.1
-
-# PR review
-smt changes main..feature-branch # symbols in changed files + caller counts
-
-# Graph management
-smt build --check                # show graph stats
-smt build --clear                # wipe and rebuild from scratch
-smt status                       # node/edge counts, git freshness
-smt start                        # start Neo4j container
-smt stop                         # stop Neo4j container
-smt setup [--dir PATH]           # configure project (.claude/settings.json + hooks)
-```
-
----
-
-## CLI Reference
-
-```
-smt build [--dir PATH] [--check] [--clear]
-smt sync [RANGE]
-
+# Query
 smt definition SYMBOL [--file SUBSTR] [--compact] [--brief]
-smt context   SYMBOL [--depth N] [--compress] [--callers] [--compact] [--brief]
-smt impact    SYMBOL [--depth N] [--compress] [--compact] [--brief]
-smt view      SYMBOL [--file SUBSTR] [--context N]
-smt search    QUERY  [--top N]
+smt context    SYMBOL [--depth N] [--compress] [--callers] [--compact] [--brief]
+smt impact     SYMBOL [--depth N] [--compress] [--compact] [--brief]
+smt view       SYMBOL [--file SUBSTR] [--context N]
+smt search     QUERY  [--top N]              # semantic search (local embeddings, no API calls)
+smt explain    SYMBOL [--depth N]            # generate a Claude-ready context prompt for a symbol
 
-smt list      [--module PATH]
-smt scope     FILE
-smt unused
-smt cycles
-smt hot       [--top N]
-smt complexity [--top N]
-smt bottleneck [--top N]
-smt modules
-smt path      A B
-smt changes   [RANGE]
+# Analysis
+smt list      [--module PATH]               # enumerate symbols, filter by path
+smt scope     FILE                          # file exports, imports, internal symbols
+smt unused                                  # dead code candidates
+smt cycles                                  # circular dependencies
+smt hot       [--top N]                     # most-called symbols (coupling hotspots)
+smt complexity [--top N]                    # fan-in × fan-out god functions
+smt bottleneck [--top N]                    # cross-file bridge symbols
+smt modules                                 # files ranked by coupling
+smt path      A B                           # shortest call path between two symbols
+smt changes   [RANGE]                       # symbols in changed files + caller counts
 smt breaking-changes SYMBOL [--before REF] [--after REF]
+smt layer     [--config PATH]               # enforce forbidden dependency directions between modules
 
-smt status
-smt start
-smt stop
-smt setup     [--dir PATH]
+# Setup & config
+smt onboard                                 # guided setup and orientation wizard
+smt setup     [--dir PATH]                  # configure project (.claude/settings.json + hooks)
+smt hooks     install|uninstall [--dir PATH] # manage git post-commit auto-sync hooks
+smt config                                  # show all settings
+smt config    set KEY VALUE                 # change a setting (saved to ~/.smt/config.json)
+smt config    reset                         # reset user preferences to defaults
 ```
 
 **Output flags** (apply to `definition`, `context`, `impact`):
 - `--compact` — single-line format, 40–60% fewer tokens
 - `--brief` — suppress docstrings
 - `--compress` — remove trivial pass-through functions from context
-
----
-
-## Agent Integration
-
-SMT works as a subprocess from any agent framework:
-
-```bash
-smt definition validate_graph
-smt context GraphBuilder --depth 2 --compress
-smt impact Neo4jClient --depth 3
-```
-
-### Claude Code
-
-Run `smt setup` once in your project to install hooks. This writes `.claude/settings.json` with:
-- **PreToolUse hooks** — blocks raw file reads and greps, routes them through SMT first
-- **`SMT_AGENT=1`** env var — automatically suppresses log noise and applies compact output in agent sessions
-
-Then use the built-in skill:
-
-```
-/smt-analysis
-```
-
-Or ask naturally — "what breaks if I change X?" / "architecture health check" / "what parts can be worked on independently?"
 
 ---
 
@@ -264,11 +219,29 @@ Source Code (Python / TypeScript / Go / Rust / Java)
 
 ---
 
-## Requirements
+## Agent Integration
 
-- Python 3.11+ (from python.org, not Microsoft Store)
-- Docker (for Neo4j)
-- Git
+SMT works as a subprocess from any agent framework:
+
+```bash
+smt definition validate_graph
+smt context GraphBuilder --depth 2 --compress
+smt impact Neo4jClient --depth 3
+```
+
+### Claude Code
+
+Run `smt setup` once in your project to install hooks. This writes `.claude/settings.json` with:
+- **PreToolUse hooks** — blocks raw file reads and greps, routes them through SMT first
+- **`SMT_AGENT=1`** env var — automatically suppresses log noise and applies compact output in agent sessions
+
+Then use the built-in skill:
+
+```
+/smt-analysis
+```
+
+Or ask naturally — "what breaks if I change X?" / "architecture health check" / "what parts can be worked on independently?"
 
 ---
 
