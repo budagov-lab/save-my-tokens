@@ -122,6 +122,14 @@ class PythonParser(BaseParser):
         """Extract class definition."""
         return self._make_symbol(node, "class", source_code, file_path, parent)
 
+    # Node types that may contain method definitions but are not themselves methods
+    _CONTROL_FLOW = {
+        "if_statement", "else_clause", "elif_clause",
+        "try_statement", "except_clause", "finally_clause",
+        "with_statement", "for_statement", "while_statement",
+        "block",
+    }
+
     def _extract_class_members(
         self,
         class_node,
@@ -130,23 +138,36 @@ class PythonParser(BaseParser):
         symbols: List[Symbol],
         class_name: str,
     ):
-        """Extract methods from class body."""
-        # Find class body block
+        """Extract methods from class body, including those inside if/try/else blocks."""
         for child in class_node.children:
             if child.type == "block":
-                for stmt in child.children:
-                    fn_node = stmt
-                    if stmt.type == "decorated_definition":
-                        fn_node = next(
-                            (c for c in stmt.children if c.type == "function_definition"),
-                            None,
-                        )
-                    if fn_node and fn_node.type == "function_definition":
-                        method = self._extract_function(
-                            fn_node, source_code, file_path, class_name
-                        )
-                        if method is not None:
-                            symbols.append(method)
+                self._collect_methods(child, source_code, file_path, symbols, class_name)
+
+    def _collect_methods(
+        self,
+        node,
+        source_code: bytes,
+        file_path: str,
+        symbols: List[Symbol],
+        class_name: str,
+    ):
+        """Recursively collect methods within a block, diving into control flow."""
+        for stmt in node.children:
+            if stmt.type == "function_definition":
+                method = self._extract_function(stmt, source_code, file_path, class_name)
+                if method is not None:
+                    symbols.append(method)
+                # do not recurse into the function body — nested defs are not class methods
+            elif stmt.type == "decorated_definition":
+                fn_node = next(
+                    (c for c in stmt.children if c.type == "function_definition"), None
+                )
+                if fn_node:
+                    method = self._extract_function(fn_node, source_code, file_path, class_name)
+                    if method is not None:
+                        symbols.append(method)
+            elif stmt.type in self._CONTROL_FLOW:
+                self._collect_methods(stmt, source_code, file_path, symbols, class_name)
 
     def _extract_nested(
         self,

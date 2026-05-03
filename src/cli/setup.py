@@ -227,7 +227,10 @@ def cmd_setup(target_dir: Path) -> int:
     existing['respectGitignore'] = True
 
     # PreToolUse hooks — inject SMT skill into Explorer, Planner, and Advisor
-    _hook_cmd = "python .claude/hooks/smt_agent_hook.py"
+    # Point at SMT_DIR so the path is always valid for this machine (smt setup must be
+    # re-run after cloning, just like smt build — no stale per-project copies needed)
+    hook_abs = (SMT_DIR / '.claude' / 'hooks' / 'smt_agent_hook.py').resolve()
+    _hook_cmd = f'python "{hook_abs}"'
     _hook_entry = {"type": "command", "command": _hook_cmd}
     _smt_hooks = [
         {"matcher": "Agent",   "hooks": [_hook_entry]},
@@ -237,10 +240,10 @@ def cmd_setup(target_dir: Path) -> int:
     ]
     existing.setdefault('hooks', {})
     existing['hooks'].setdefault('PreToolUse', [])
-    # Remove any stale SMT entries, then re-add fresh
+    # Remove any stale SMT entries (match on filename, handles relative→absolute upgrade)
     existing['hooks']['PreToolUse'] = [
         h for h in existing['hooks']['PreToolUse']
-        if not any(hk.get('command') == _hook_cmd for hk in h.get('hooks', []))
+        if not any('smt_agent_hook.py' in hk.get('command', '') for hk in h.get('hooks', []))
     ] + _smt_hooks
 
     with open(settings_file, 'w', encoding='utf-8') as f:
@@ -267,17 +270,7 @@ def cmd_setup(target_dir: Path) -> int:
     else:
         print(f"  .claude/skills/smt-analysis/ [SKIP] — source not found at {smt_skill_src}")
 
-    # ------------------------------------------------------------------
-    # 2b. .claude/hooks/smt_agent_hook.py — PreToolUse hook script
-    # ------------------------------------------------------------------
-    hook_src = SMT_DIR / '.claude' / 'hooks' / 'smt_agent_hook.py'
-    hook_dst_dir = claude_dir / 'hooks'
-    if hook_src.exists():
-        hook_dst_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(hook_src), str(hook_dst_dir / 'smt_agent_hook.py'))
-        print("  .claude/hooks/         [OK] — smt_agent_hook.py")
-    else:
-        print(f"  .claude/hooks/         [SKIP] — hook script not found at {hook_src}")
+    # (hook lives in SMT_DIR — no per-project copy needed)
 
     # ------------------------------------------------------------------
     # 3. .claude/a2a/smt.json — A2A agent card

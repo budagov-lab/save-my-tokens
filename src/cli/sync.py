@@ -29,13 +29,11 @@ def cmd_sync(commit_range: str = 'HEAD~1..HEAD', target_dir: Optional[str] = Non
         client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, project_id=project_id)
 
         index = SymbolIndex()
-        cache_dir = target_path / '.smt' / 'embeddings'
-        embedding_svc = EmbeddingService(index, cache_dir=cache_dir)
 
         updater = IncrementalSymbolUpdater(
             symbol_index=index,
             neo4j_client=client,
-            embedding_service=embedding_svc,
+            embedding_service=None,
             base_path=str(target_path),
         )
 

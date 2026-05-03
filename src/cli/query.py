@@ -1,4 +1,4 @@
-"""SMT query commands: context, definition, view, impact."""
+"""SMT query commands: context, definition, view, impact, grep."""
 
 import traceback
 from pathlib import Path
@@ -157,6 +157,44 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         return 1
 
 
+def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str, project_path):
+    """When exact name match fails: try Class.method split, then show partial-name suggestions."""
+    # Stage 1: user typed Class.method — split and match name + parent
+    if '.' in symbol:
+        parent_hint, name_part = symbol.rsplit('.', 1)
+        fb = session.run(
+            f"MATCH (n {{name: $name}}) "
+            f"WHERE n.parent = $parent {pid_clause} "
+            "RETURN n, CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END as priority "
+            "ORDER BY priority LIMIT 1",
+            name=name_part, parent=parent_hint, pid=project_id,
+        ).single()
+        if fb:
+            return fb
+
+    # Stage 2: partial name match — show suggestions, return None
+    term = symbol.rsplit('.', 1)[-1]
+    suggestions = session.run(
+        f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower($term) {pid_clause} "
+        "RETURN n.name AS name, n.parent AS parent, n.file AS file, labels(n)[0] AS type "
+        "ORDER BY size(n.name) LIMIT 5",
+        term=term, pid=project_id,
+    ).data()
+
+    print(f"Symbol '{symbol}' not found in graph.")
+    if suggestions:
+        print("  Did you mean:")
+        for s in suggestions:
+            qname = f"{s['parent']}.{s['name']}" if s.get('parent') else s['name']
+            try:
+                display = str(Path(s['file']).relative_to(project_path))
+            except (ValueError, TypeError):
+                display = s['file'] or '?'
+            print(f"    {qname}  [{s['type']}]  ({display})")
+        print(f"\n  Or try: smt search \"{term}\"")
+    return None
+
+
 def cmd_definition(symbol: str, file_filter: Optional[str] = None,
                    compact: bool = False, brief: bool = False) -> int:
     """Fast definition lookup — just the signature and 1-hop callees."""
@@ -209,9 +247,10 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None,
                 node = session.run(query, name=symbol, pid=project_id).single()
 
             if not node:
-                print(f"Symbol '{symbol}' not found in graph.")
-                client.driver.close()
-                return 1
+                node = _fallback_definition(session, symbol, pid_clause, project_id, project_path)
+                if not node:
+                    client.driver.close()
+                    return 1
 
             n = node['n']
             if compact:
@@ -233,7 +272,7 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None,
                 f"MATCH (n {{name: $name}})-[:CALLS]->(callee {callee_pid}) "
                 f"WHERE 1=1 {pid_clause} "
                 "RETURN callee.name AS name, callee.file AS file",
-                name=symbol, pid=project_id
+                name=n.get('name'), pid=project_id
             ).data()
             if callees:
                 if compact:
@@ -297,7 +336,13 @@ def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int 
         client.driver.close()
 
         if not row:
-            print(f"Symbol '{symbol}' not found in graph.")
+            _FILE_EXTS = ('.py', '.ts', '.js', '.go', '.rs', '.java', '.tsx', '.jsx')
+            if any(symbol.endswith(ext) for ext in _FILE_EXTS) or '/' in symbol or '\\' in symbol:
+                print(f"Symbol '{symbol}' not found — looks like a file path.")
+                print(f"  smt view takes a symbol name, not a file path.")
+                print(f"  Try: smt scope {Path(symbol).name}")
+            else:
+                print(f"Symbol '{symbol}' not found in graph.")
             return 1
 
         n = row["n"]
@@ -468,4 +513,84 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
     except Exception as e:
         print(f"ERROR: {e}")
         logger.error(f"cmd_impact error: {traceback.format_exc()}")
+        return 1
+
+
+def cmd_grep(pattern: str, field: Optional[str] = None,
+             type_filter: Optional[str] = None, top: int = 20) -> int:
+    """Text search across symbol names, signatures, and docstrings in the graph."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    project_id = _get_project_id(project_path)
+    try:
+        client = _get_neo4j_client(project_id)
+        pid_clause = "AND n.project_id = $pid" if project_id else ""
+
+        if field == "name":
+            field_cond = "toLower(n.name) CONTAINS toLower($pat)"
+        elif field == "sig":
+            field_cond = "n.signature IS NOT NULL AND toLower(n.signature) CONTAINS toLower($pat)"
+        elif field == "doc":
+            field_cond = "n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)"
+        else:
+            field_cond = (
+                "(toLower(n.name) CONTAINS toLower($pat) "
+                "OR (n.signature IS NOT NULL AND toLower(n.signature) CONTAINS toLower($pat)) "
+                "OR (n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)))"
+            )
+
+        type_cond = f"AND n:{type_filter}" if type_filter else ""
+
+        query = f"""
+            MATCH (n)
+            WHERE {field_cond} {type_cond} {pid_clause}
+            RETURN n, labels(n)[0] AS ltype,
+                   CASE WHEN toLower(n.name) CONTAINS toLower($pat) THEN 0 ELSE 1 END AS rank
+            ORDER BY rank, n.file, n.line
+            LIMIT $top
+        """
+
+        with client.driver.session() as session:
+            rows = session.run(query, pat=pattern, pid=project_id, top=top).data()
+
+        client.driver.close()
+
+        if not rows:
+            print(f"No symbols matching '{pattern}'")
+            return 1
+
+        print(f"Grep: '{pattern}'  ({len(rows)} result{'s' if len(rows) != 1 else ''})\n")
+        pat_lower = pattern.lower()
+        for row in rows:
+            n = row["n"]
+            sym_type = row["ltype"] or "?"
+            name = n.get("name", "?")
+            parent = n.get("parent")
+            qname = f"{parent}.{name}" if parent else name
+            try:
+                file_display = str(Path(n.get("file", "?")).relative_to(project_path))
+            except (ValueError, TypeError):
+                file_display = n.get("file") or "?"
+
+            print(f"  {qname}  [{sym_type}]")
+            print(f"    {file_display}:{n.get('line', '?')}")
+
+            for label, value in [("sig", n.get("signature")), ("doc", n.get("docstring"))]:
+                if value and pat_lower in value.lower():
+                    idx = value.lower().index(pat_lower)
+                    s = max(0, idx - 40)
+                    e = min(len(value), idx + len(pattern) + 40)
+                    snippet = value[s:e].replace("\n", " ")
+                    if s > 0:
+                        snippet = "..." + snippet
+                    if e < len(value):
+                        snippet += "..."
+                    print(f"    {label}: {snippet}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        logger.error(f"cmd_grep error: {traceback.format_exc()}")
         return 1

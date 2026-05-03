@@ -13,6 +13,8 @@ from src.cli._helpers import (
 
 def cmd_list(module: Optional[str] = None, type_filter: Optional[str] = None, limit: int = 0) -> int:
     """Enumerate all symbols in the graph, optionally filtered by file/module path and type."""
+    import os as _os
+
     project_path = _resolve_project_path()
     if not _require_git(project_path):
         return 1
@@ -28,7 +30,7 @@ def cmd_list(module: Optional[str] = None, type_filter: Optional[str] = None, li
             params: dict = {"pid": pid}
             if module:
                 conditions.append("n.file CONTAINS $module")
-                params["module"] = module
+                params["module"] = module.replace("/", _os.sep).replace("\\", _os.sep)
             if label_filter:
                 conditions.append(f"n:{label_filter}")
 
@@ -148,26 +150,42 @@ def cmd_path(symbol_a: str, symbol_b: str) -> int:
 
 def cmd_scope(file_filter: str) -> int:
     """File-level surface analysis: exports, imports, internal symbols."""
+    import os as _os
+
     project_path = _resolve_project_path()
     if not _require_git(project_path):
         return 1
+
+    # Normalize path separators so forward-slash input matches OS-native stored paths,
+    # then try common extensions if the caller omitted one (e.g. "exceptions" → "exceptions.py").
+    normalized = file_filter.replace("/", _os.sep).replace("\\", _os.sep)
 
     try:
         client = _get_neo4j_client(_get_project_id(project_path))
         pid = client.project_id
 
-        with client.driver.session() as session:
-            file_rows = session.run(
+        def _run_filter(session, f: str):
+            return session.run(
                 """
                 MATCH (n {project_id: $pid})
                 WHERE n.file IS NOT NULL AND n.file CONTAINS $filter AND NOT n:Commit
                 RETURN DISTINCT n.file AS file ORDER BY n.file
                 """,
-                pid=pid, filter=file_filter
+                pid=pid, filter=f
             ).data()
+
+        with client.driver.session() as session:
+            file_rows = _run_filter(session, normalized)
+            if not file_rows and not Path(normalized).suffix:
+                for ext in ('.py', '.ts', '.tsx', '.js', '.go', '.rs', '.java'):
+                    file_rows = _run_filter(session, normalized + ext)
+                    if file_rows:
+                        break
 
         if not file_rows:
             print(f"No symbols found for file filter: {file_filter!r}")
+            if not Path(normalized).suffix:
+                print(f"  Tip: include the file extension (e.g. '{file_filter}.py')")
             return 1
 
         if len(file_rows) > 1:

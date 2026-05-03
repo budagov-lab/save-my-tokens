@@ -122,7 +122,7 @@ from src.cli.status import cmd_status
 
 from src.cli.build import cmd_build
 
-from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact
+from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact, cmd_grep
 
 from src.cli.search import cmd_search, cmd_explain
 from src.cli.sync import cmd_sync
@@ -183,6 +183,7 @@ graph analysis:
     p_build.add_argument('--dir', default=None, help='Target project directory (default: cwd)')
     p_build.add_argument('--check', action='store_true', help='Show stats only')
     p_build.add_argument('--clear', action='store_true', help='Wipe and rebuild')
+    p_build.add_argument('--embeddings', action='store_true', help='Also build semantic search index (slow, opt-in)')
 
     # context
     p_ctx = sub.add_parser('context', help='Symbol context (bidirectional, bounded)')
@@ -219,14 +220,23 @@ graph analysis:
     p_impact.add_argument('--brief', action='store_true')
     p_impact.add_argument('--json', action='store_true')
 
-    # search
-    p_search = sub.add_parser('search', help='Semantic search')
+    # search (semantic, opt-in via smt build --embeddings)
+    p_search = sub.add_parser('search', help='Semantic search (requires smt build --embeddings)')
     p_search.add_argument('query')
     p_search.add_argument('--top', type=int, default=5)
     p_search.add_argument('--json', action='store_true')
     follow_grp = p_search.add_mutually_exclusive_group()
     follow_grp.add_argument('--context', action='store_true')
     follow_grp.add_argument('--impact', action='store_true')
+
+    # grep (fast text search on AST index — no embeddings needed)
+    p_grep = sub.add_parser('grep', help='Text search across symbol names, signatures, and docstrings')
+    p_grep.add_argument('pattern', help='Substring to search for (case-insensitive)')
+    p_grep.add_argument('--field', choices=['name', 'sig', 'doc'], default=None,
+                        help='Restrict to a specific field (default: all)')
+    p_grep.add_argument('--type', dest='type_filter', default=None,
+                        help='Filter by node type: Function, Class, etc.')
+    p_grep.add_argument('--top', type=int, default=20)
 
     # sync
     p_sync = sub.add_parser('sync', help='Sync graph with git commits (incremental update)')
@@ -337,7 +347,8 @@ graph analysis:
                 setattr(args, _flag, True)
 
     if args.command == 'build':
-        return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir)
+        return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir,
+                         embeddings=getattr(args, 'embeddings', False))
     elif args.command == 'context':
         depth = args.depth if args.depth is not None else _get_default_depth(2)
         if getattr(args, 'json', False):
@@ -376,6 +387,9 @@ graph analysis:
             return 0
         follow = 'context' if getattr(args, 'context', False) else ('impact' if getattr(args, 'impact', False) else None)
         return cmd_search(args.query, top_k=args.top, follow=follow)
+    elif args.command == 'grep':
+        return cmd_grep(args.pattern, field=args.field,
+                        type_filter=args.type_filter, top=args.top)
     elif args.command == 'sync':
         return cmd_sync(commit_range=args.range, target_dir=args.dir)
     elif args.command == 'watch':

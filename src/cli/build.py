@@ -16,7 +16,7 @@ from src.cli._helpers import (
 )
 
 
-def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str] = None) -> int:
+def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str] = None, embeddings: bool = False) -> int:
     from src.cli.status import cmd_status
 
     settings, Neo4jClient, GraphBuilder, SymbolIndex, EmbeddingService, _ = _get_services()
@@ -52,7 +52,39 @@ def cmd_build(check: bool = False, clear: bool = False, target_dir: Optional[str
                 logger.info(f"Cleared embeddings cache: {embeddings_dir}")
 
         builder = GraphBuilder(str(src_dir), neo4j_client=client, project_id=project_id)
-        builder.build()
+        builder.build(build_embeddings=False)
+
+        if embeddings:
+            try:
+                from src.cli._helpers import _get_embedding_service
+                from src.parsers.symbol import Symbol
+                cache_dir = target_path / '.smt' / 'embeddings'
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                svc = _get_embedding_service(cache_dir)
+                with client.driver.session() as session:
+                    rows = session.run(
+                        "MATCH (n {project_id: $pid}) RETURN n, labels(n) as labels",
+                        pid=project_id
+                    ).data()
+                for row in rows:
+                    n = row['n']
+                    labels = row['labels']
+                    if not n.get('name'):
+                        continue
+                    svc.symbol_index.add(Symbol(
+                        name=n.get('name', ''),
+                        type=labels[0] if labels else 'Unknown',
+                        file=n.get('file', ''),
+                        line=n.get('line', 0),
+                        column=n.get('column', 0),
+                        docstring=n.get('docstring'),
+                    ))
+                print("Building semantic search index ...")
+                svc.build_index()
+                svc.save_index()
+            except Exception as _emb_err:
+                logger.warning(f"Embedding index build skipped: {_emb_err}")
+
         client.driver.close()
         print(f"Done. (project: {target_path.name} [{project_id}])")
         return cmd_status()
