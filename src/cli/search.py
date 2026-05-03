@@ -25,29 +25,8 @@ def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
         svc = _get_embedding_service(cache_dir)
 
         if not svc.load_index():
-            from src.graph.neo4j_client import Neo4jClient
-            from src.parsers.symbol import Symbol
-            client = Neo4jClient(settings.NEO4J_URI, settings.NEO4J_USER, settings.NEO4J_PASSWORD, project_id=project_id)
-            with client.driver.session() as session:
-                rows = session.run(
-                    "MATCH (n {project_id: $pid}) RETURN n, labels(n) as labels", pid=project_id
-                ).data()
-            client.driver.close()
-            for row in rows:
-                n = row['n']
-                labels = row['labels']
-                if not n.get('name'):
-                    continue
-                svc.symbol_index.add(Symbol(
-                    name=n.get('name', ''),
-                    type=labels[0] if labels else 'Unknown',
-                    file=n.get('file', ''),
-                    line=n.get('line', 0),
-                    column=n.get('column', 0),
-                    docstring=n.get('docstring'),
-                ))
-            svc.build_index()
-            svc.save_index()
+            print(f"Embeddings index not found — run: smt build --embeddings")
+            return 1
 
         results = svc.search(query, top_k=top_k)
 

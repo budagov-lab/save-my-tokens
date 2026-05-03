@@ -17,6 +17,21 @@ from src.cli._helpers import (
 from src.graph.neo4j_client import compute_depths as _compute_depths
 
 
+def _resolve_dotted_name(client, symbol: str, project_id: str) -> Optional[str]:
+    """Try to resolve 'Class.method' → stored name when exact match fails."""
+    if '.' not in symbol:
+        return None
+    parent_hint, name_part = symbol.rsplit('.', 1)
+    pid_clause = "AND n.project_id = $pid" if project_id else ""
+    with client.driver.session() as s:
+        row = s.run(
+            f"MATCH (n {{name: $name}}) WHERE n.parent = $parent {pid_clause} "
+            "RETURN n.name AS name LIMIT 1",
+            name=name_part, parent=parent_hint, pid=project_id,
+        ).single()
+    return row["name"] if row else None
+
+
 def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
                 file_filter: Optional[str] = None, compress: bool = False,
                 compact: bool = False, brief: bool = False) -> int:
@@ -33,6 +48,10 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         max_depth = max(1, min(depth, 10))
         subgraph = client.get_bounded_subgraph(symbol, max_depth=max_depth, file_filter=file_filter)
 
+        if not subgraph:
+            resolved = _resolve_dotted_name(client, symbol, _get_project_id(project_path))
+            if resolved:
+                subgraph = client.get_bounded_subgraph(resolved, max_depth=max_depth, file_filter=file_filter)
         if not subgraph:
             print(f"Symbol '{symbol}' not found in graph.")
             client.driver.close()
@@ -305,7 +324,8 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None,
         return 1
 
 
-def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int = 0) -> int:
+def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int = 0,
+             compact: bool = False, brief: bool = False) -> int:
     """Show only the source lines for a symbol — graph lookup then targeted file read."""
     project_path = _resolve_project_path()
     if not _require_git(project_path):
@@ -380,8 +400,15 @@ def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int 
         start = max(0, line_start - 1 - context_lines)
         end = min(total, (line_end if line_end else line_start + 29) + context_lines)
 
+        _LINE_CAP = 60
+        truncated = compact and (end - start) > _LINE_CAP
+        if truncated:
+            end = start + _LINE_CAP
+
         label = f"{symbol}  [{', '.join(n.labels)}]"
         range_str = f"lines {start + 1}–{end}" + (f"  (end_line not in graph — showing window)" if not line_end else "")
+        if truncated:
+            range_str += f"  (truncated at {_LINE_CAP} lines — use smt view {symbol} without --compact to see all)"
         print(f"\n{label}")
         print(f"  {file_path}:{line_start}  {range_str}\n")
 
@@ -412,6 +439,10 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
 
         impact_set = client.get_impact_graph(symbol, max_depth=max_depth)
 
+        if not impact_set:
+            resolved = _resolve_dotted_name(client, symbol, _get_project_id(project_path))
+            if resolved:
+                impact_set = client.get_impact_graph(resolved, max_depth=max_depth)
         if not impact_set:
             print(f"Symbol '{symbol}' not found in graph.")
             client.driver.close()

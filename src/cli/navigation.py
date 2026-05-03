@@ -52,6 +52,8 @@ def cmd_list(module: Optional[str] = None, type_filter: Optional[str] = None, li
                 filters.append(f"type={label_filter}")
             suffix = f" ({', '.join(filters)})" if filters else ""
             print(f"No symbols found{suffix}.")
+            if module and not any(sep in module for sep in ('/', '\\', '.py', '.ts', '.go', '.rs', '.java')):
+                print(f"  Tip: --module expects a file path segment (e.g. 'requests/models.py'), not a symbol or class name.")
             return 0
 
         total = len(rows)
@@ -148,7 +150,7 @@ def cmd_path(symbol_a: str, symbol_b: str) -> int:
         return 1
 
 
-def cmd_scope(file_filter: str) -> int:
+def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
     """File-level surface analysis: exports, imports, internal symbols."""
     import os as _os
 
@@ -188,6 +190,12 @@ def cmd_scope(file_filter: str) -> int:
                 print(f"  Tip: include the file extension (e.g. '{file_filter}.py')")
             return 1
 
+        if len(file_rows) > 1 and dir_filter:
+            dir_norm = dir_filter.replace("/", _os.sep).replace("\\", _os.sep)
+            filtered = [r for r in file_rows if dir_norm in r['file']]
+            if filtered:
+                file_rows = filtered
+
         if len(file_rows) > 1:
             print(f"Multiple files match {file_filter!r} — be more specific:\n")
             for r in file_rows[:10]:
@@ -195,6 +203,7 @@ def cmd_scope(file_filter: str) -> int:
                     print(f"  {Path(r['file']).relative_to(project_path)}")
                 except ValueError:
                     print(f"  {r['file']}")
+            print(f"\n  Use: smt scope {file_filter} --dir <path-fragment>")
             return 1
 
         file_abs = file_rows[0]['file']
@@ -280,10 +289,15 @@ def cmd_scope(file_filter: str) -> int:
                     print(f"      {dep['name']}  [{dep['type']}]")
 
         if internal_syms:
-            print(f"\n  internal — not directly coupled across files ({len(internal_syms)}):")
-            for sym in internal_syms:
-                line_str = f":{sym['line']}" if sym['line'] else ""
-                print(f"    {sym['name']:<45} [{sym['type']}]{line_str}")
+            import os as _os2
+            if _os2.environ.get("SMT_AGENT"):
+                print(f"\n  internal — not coupled across files ({len(internal_syms)} symbols)")
+                print(f"  (use smt list --module {Path(display).name} to enumerate)")
+            else:
+                print(f"\n  internal — not directly coupled across files ({len(internal_syms)}):")
+                for sym in internal_syms:
+                    line_str = f":{sym['line']}" if sym['line'] else ""
+                    print(f"    {sym['name']:<45} [{sym['type']}]{line_str}")
 
         return 0
     except Exception as e:

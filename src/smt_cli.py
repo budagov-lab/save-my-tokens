@@ -320,6 +320,8 @@ graph analysis:
     # scope
     p_scope = sub.add_parser('scope', help='File surface: exports, imports, internal symbols')
     p_scope.add_argument('file')
+    p_scope.add_argument('--dir', default=None, dest='dir_filter',
+                         help='Path fragment to disambiguate when multiple files match (e.g. requests/)')
 
     # bottleneck
     p_bottleneck = sub.add_parser('bottleneck', help='Cross-file bridge nodes — architectural chokepoints')
@@ -373,7 +375,9 @@ graph analysis:
                               compact=getattr(args, 'compact', False), brief=getattr(args, 'brief', False))
     elif args.command == 'view':
         return cmd_view(args.symbol, file_filter=args.file,
-                        context_lines=getattr(args, 'context_lines', 0))
+                        context_lines=getattr(args, 'context_lines', 0),
+                        compact=getattr(args, 'compact', False),
+                        brief=getattr(args, 'brief', False))
     elif args.command == 'impact':
         depth = args.depth if args.depth is not None else _get_default_depth(3)
         if getattr(args, 'json', False):
@@ -452,7 +456,7 @@ graph analysis:
     elif args.command == 'complexity':
         return cmd_complexity(limit=args.top)
     elif args.command == 'scope':
-        return cmd_scope(args.file)
+        return cmd_scope(args.file, dir_filter=getattr(args, 'dir_filter', None))
     elif args.command == 'bottleneck':
         return cmd_bottleneck(limit=args.top)
     elif args.command == 'layer':
