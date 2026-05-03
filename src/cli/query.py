@@ -530,14 +530,11 @@ def cmd_grep(pattern: str, field: Optional[str] = None,
 
         if field == "name":
             field_cond = "toLower(n.name) CONTAINS toLower($pat)"
-        elif field == "sig":
-            field_cond = "n.signature IS NOT NULL AND toLower(n.signature) CONTAINS toLower($pat)"
         elif field == "doc":
             field_cond = "n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)"
         else:
             field_cond = (
                 "(toLower(n.name) CONTAINS toLower($pat) "
-                "OR (n.signature IS NOT NULL AND toLower(n.signature) CONTAINS toLower($pat)) "
                 "OR (n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)))"
             )
 
@@ -577,7 +574,7 @@ def cmd_grep(pattern: str, field: Optional[str] = None,
             print(f"  {qname}  [{sym_type}]")
             print(f"    {file_display}:{n.get('line', '?')}")
 
-            for label, value in [("sig", n.get("signature")), ("doc", n.get("docstring"))]:
+            for label, value in [("doc", n.get("docstring"))]:
                 if value and pat_lower in value.lower():
                     idx = value.lower().index(pat_lower)
                     s = max(0, idx - 40)

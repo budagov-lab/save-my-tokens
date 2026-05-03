@@ -232,8 +232,8 @@ graph analysis:
     # grep (fast text search on AST index — no embeddings needed)
     p_grep = sub.add_parser('grep', help='Text search across symbol names, signatures, and docstrings')
     p_grep.add_argument('pattern', help='Substring to search for (case-insensitive)')
-    p_grep.add_argument('--field', choices=['name', 'sig', 'doc'], default=None,
-                        help='Restrict to a specific field (default: all)')
+    p_grep.add_argument('--field', choices=['name', 'doc'], default=None,
+                        help='Restrict to a specific field (default: name + doc)')
     p_grep.add_argument('--type', dest='type_filter', default=None,
                         help='Filter by node type: Function, Class, etc.')
     p_grep.add_argument('--top', type=int, default=20)
