@@ -210,6 +210,8 @@ graph analysis:
     p_view.add_argument('--file', default=None)
     p_view.add_argument('--context', type=int, default=0, dest='context_lines',
                         help='Extra lines before/after the symbol body (default: 0)')
+    p_view.add_argument('--compact', action='store_true', help=argparse.SUPPRESS)
+    p_view.add_argument('--brief', action='store_true', help=argparse.SUPPRESS)
 
     # impact
     p_impact = sub.add_parser('impact', help='Impact analysis: what breaks if I change this?')
@@ -237,6 +239,8 @@ graph analysis:
     p_grep.add_argument('--type', dest='type_filter', default=None,
                         help='Filter by node type: Function, Class, etc.')
     p_grep.add_argument('--top', type=int, default=20)
+    p_grep.add_argument('--module', default=None,
+                        help='Filter by file path fragment (e.g. --module adapters)')
 
     # sync
     p_sync = sub.add_parser('sync', help='Sync graph with git commits (incremental update)')
@@ -389,7 +393,8 @@ graph analysis:
         return cmd_search(args.query, top_k=args.top, follow=follow)
     elif args.command == 'grep':
         return cmd_grep(args.pattern, field=args.field,
-                        type_filter=args.type_filter, top=args.top)
+                        type_filter=args.type_filter, top=args.top,
+                        module=getattr(args, 'module', None))
     elif args.command == 'sync':
         return cmd_sync(commit_range=args.range, target_dir=args.dir)
     elif args.command == 'watch':

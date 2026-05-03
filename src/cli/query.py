@@ -1,5 +1,6 @@
 """SMT query commands: context, definition, view, impact, grep."""
 
+import re
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -333,6 +334,20 @@ def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int 
                 """
                 row = session.run(query, name=symbol, pid=project_id).single()
 
+            if not row and '.' in symbol and not any(
+                symbol.endswith(ext) for ext in ('.py', '.ts', '.js', '.go', '.rs', '.java', '.tsx', '.jsx')
+            ):
+                # Dotted name like Class.method — retry with parent+name split
+                left, right = symbol.rsplit('.', 1)
+                fallback_q = f"""
+                    MATCH (n {{name: $name}})
+                    WHERE n.parent CONTAINS $parent {pid_clause}
+                    RETURN n,
+                           CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END AS priority
+                    ORDER BY priority LIMIT 1
+                """
+                row = session.run(fallback_q, name=right, parent=left, pid=project_id).single()
+
         client.driver.close()
 
         if not row:
@@ -517,49 +532,85 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
 
 
 def cmd_grep(pattern: str, field: Optional[str] = None,
-             type_filter: Optional[str] = None, top: int = 20) -> int:
+             type_filter: Optional[str] = None, top: int = 20,
+             module: Optional[str] = None) -> int:
     """Text search across symbol names, signatures, and docstrings in the graph."""
     project_path = _resolve_project_path()
     if not _require_git(project_path):
         return 1
 
+    # Strip source-style prefixes agents tend to copy from grep output
+    for prefix in ("def ", "class ", "async def "):
+        if pattern.startswith(prefix):
+            pattern = pattern[len(prefix):]
+            break
+
+    # Support | alternation (POSIX \| or plain |): split into OR-of-CONTAINS
+    raw_alts = [p.strip() for p in re.split(r"\\?\|", pattern) if p.strip()]
+    alts = raw_alts if len(raw_alts) > 1 else [pattern]
+
     project_id = _get_project_id(project_path)
     try:
         client = _get_neo4j_client(project_id)
         pid_clause = "AND n.project_id = $pid" if project_id else ""
+        module_cond = "AND toLower(n.file) CONTAINS toLower($module)" if module else ""
 
-        if field == "name":
-            field_cond = "toLower(n.name) CONTAINS toLower($pat)"
-        elif field == "doc":
-            field_cond = "n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)"
-        else:
-            field_cond = (
-                "(toLower(n.name) CONTAINS toLower($pat) "
-                "OR (n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower($pat)))"
+        def _make_field_cond(pat_param: str) -> str:
+            if field == "name":
+                return f"toLower(n.name) CONTAINS toLower({pat_param})"
+            elif field == "doc":
+                return f"n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower({pat_param})"
+            return (
+                f"(toLower(n.name) CONTAINS toLower({pat_param}) "
+                f"OR (n.docstring IS NOT NULL AND toLower(n.docstring) CONTAINS toLower({pat_param})))"
             )
 
-        type_cond = f"AND n:{type_filter}" if type_filter else ""
-
-        query = f"""
-            MATCH (n)
-            WHERE {field_cond} {type_cond} {pid_clause}
-            RETURN n, labels(n)[0] AS ltype,
-                   CASE WHEN toLower(n.name) CONTAINS toLower($pat) THEN 0 ELSE 1 END AS rank
-            ORDER BY rank, n.file, n.line
-            LIMIT $top
-        """
-
-        with client.driver.session() as session:
-            rows = session.run(query, pat=pattern, pid=project_id, top=top).data()
+        if len(alts) == 1:
+            field_cond = _make_field_cond("$pat")
+            type_cond = f"AND n:{type_filter}" if type_filter else ""
+            query = f"""
+                MATCH (n)
+                WHERE {field_cond} {type_cond} {module_cond} {pid_clause}
+                RETURN n, labels(n)[0] AS ltype,
+                       CASE WHEN toLower(n.name) CONTAINS toLower($pat) THEN 0 ELSE 1 END AS rank
+                ORDER BY rank, n.file, n.line
+                LIMIT $top
+            """
+            with client.driver.session() as session:
+                rows = session.run(query, pat=alts[0], pid=project_id, top=top,
+                                   module=module or "").data()
+        else:
+            # Multi-alternation: run a separate CONTAINS per term, union results
+            seen_ids: set = set()
+            rows = []
+            type_cond = f"AND n:{type_filter}" if type_filter else ""
+            with client.driver.session() as session:
+                for alt in alts:
+                    field_cond = _make_field_cond("$pat")
+                    q = f"""
+                        MATCH (n)
+                        WHERE {field_cond} {type_cond} {module_cond} {pid_clause}
+                        RETURN n, labels(n)[0] AS ltype,
+                               CASE WHEN toLower(n.name) CONTAINS toLower($pat) THEN 0 ELSE 1 END AS rank
+                        ORDER BY rank, n.file, n.line
+                        LIMIT $top
+                    """
+                    for r in session.run(q, pat=alt, pid=project_id, top=top,
+                                         module=module or "").data():
+                        n = r["n"]
+                        nid = (n.get("file"), n.get("name"), n.get("line"))
+                        if nid not in seen_ids:
+                            seen_ids.add(nid)
+                            rows.append(r)
 
         client.driver.close()
 
         if not rows:
             print(f"No symbols matching '{pattern}'")
-            return 1
+            return 0
 
         print(f"Grep: '{pattern}'  ({len(rows)} result{'s' if len(rows) != 1 else ''})\n")
-        pat_lower = pattern.lower()
+        pat_lower = alts[0].lower()
         for row in rows:
             n = row["n"]
             sym_type = row["ltype"] or "?"
@@ -578,7 +629,7 @@ def cmd_grep(pattern: str, field: Optional[str] = None,
                 if value and pat_lower in value.lower():
                     idx = value.lower().index(pat_lower)
                     s = max(0, idx - 40)
-                    e = min(len(value), idx + len(pattern) + 40)
+                    e = min(len(value), idx + len(pat_lower) + 40)
                     snippet = value[s:e].replace("\n", " ")
                     if s > 0:
                         snippet = "..." + snippet
