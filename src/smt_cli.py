@@ -124,7 +124,7 @@ from src.cli.build import cmd_build
 
 from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact, cmd_grep
 
-from src.cli.search import cmd_search, cmd_explain
+from src.cli.search import cmd_search, cmd_explain, cmd_lookup
 from src.cli.sync import cmd_sync
 from src.cli.onboard import cmd_onboard
 
@@ -143,12 +143,13 @@ commands:
   build                  Build graph from src/
   build --check          Show graph stats
   build --clear          Wipe and rebuild
+  lookup <query>         Unified resolver: exact → dot-notation → partial-name (use when unsure of name)
   definition <symbol>    Symbol definition (fast, 1-hop)
   view <symbol>          Show symbol source lines (graph lookup + targeted file read)
   context <symbol>       Symbol context (bidirectional, bounded)
   context <symbol> --callers  Who calls this symbol
   impact <symbol>        Impact analysis (reverse traversal)
-  search <query>         Semantic search
+  search <query>         Semantic search (requires smt build --embeddings)
   sync [range]           Sync graph with git commits (default: HEAD~1..HEAD)
   watch [--debounce N]   Auto-sync graph when files change (live mode)
   explain <symbol>       Print symbol context formatted for Claude to explain
@@ -230,6 +231,12 @@ graph analysis:
     follow_grp = p_search.add_mutually_exclusive_group()
     follow_grp.add_argument('--context', action='store_true')
     follow_grp.add_argument('--impact', action='store_true')
+
+    # lookup (unified resolver: exact → dot-notation → partial-name)
+    p_lookup = sub.add_parser('lookup', help='Unified resolver: exact → dot-notation → partial-name match')
+    p_lookup.add_argument('query', help='Symbol name, Class.method, or partial name fragment')
+    p_lookup.add_argument('--compact', action='store_true')
+    p_lookup.add_argument('--brief', action='store_true')
 
     # grep (fast text search on AST index — no embeddings needed)
     p_grep = sub.add_parser('grep', help='Text search across symbol names, signatures, and docstrings')
@@ -395,6 +402,10 @@ graph analysis:
             return 0
         follow = 'context' if getattr(args, 'context', False) else ('impact' if getattr(args, 'impact', False) else None)
         return cmd_search(args.query, top_k=args.top, follow=follow)
+    elif args.command == 'lookup':
+        return cmd_lookup(args.query,
+                          compact=getattr(args, 'compact', False),
+                          brief=getattr(args, 'brief', False))
     elif args.command == 'grep':
         return cmd_grep(args.pattern, field=args.field,
                         type_filter=args.type_filter, top=args.top,

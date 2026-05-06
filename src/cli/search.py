@@ -59,6 +59,116 @@ def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
         return 1
 
 
+def cmd_lookup(query: str, compact: bool = False, brief: bool = False) -> int:
+    """Unified resolver: exact match → dot-notation → semantic search. Always returns the best hit."""
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 1
+
+    project_id = _get_project_id(project_path)
+    pid_clause = "AND n.project_id = $pid" if project_id else ""
+
+    try:
+        client = _get_neo4j_client(project_id)
+        row = None
+        via = None
+
+        with client.driver.session() as session:
+            # Stage 1: exact name match
+            row = session.run(
+                f"MATCH (n {{name: $name}}) WHERE 1=1 {pid_clause} "
+                "WITH n, CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END AS p "
+                "ORDER BY p LIMIT 1 "
+                "OPTIONAL MATCH (caller)-[:CALLS]->(n) "
+                "OPTIONAL MATCH (n)-[:CALLS]->(callee) "
+                "RETURN n, count(DISTINCT caller) AS ncallers, "
+                "collect(DISTINCT callee.name)[..5] AS callees",
+                name=query, pid=project_id,
+            ).single()
+            if row:
+                via = "exact"
+
+            # Stage 2: dot-notation split (Class.method)
+            if not row and '.' in query:
+                parent, name = query.rsplit('.', 1)
+                row = session.run(
+                    f"MATCH (n {{name: $name}}) WHERE n.parent = $parent {pid_clause} "
+                    "OPTIONAL MATCH (caller)-[:CALLS]->(n) "
+                    "OPTIONAL MATCH (n)-[:CALLS]->(callee) "
+                    "RETURN n, count(DISTINCT caller) AS ncallers, "
+                    "collect(DISTINCT callee.name)[..5] AS callees LIMIT 1",
+                    name=name, parent=parent, pid=project_id,
+                ).single()
+                if row:
+                    via = "dot-notation"
+
+            # Stage 3: partial-name graph suggestions (no embeddings needed)
+            if not row:
+                term = query.rsplit('.', 1)[-1]
+                suggestions = session.run(
+                    f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower($term) {pid_clause} "
+                    "RETURN n.name AS name, n.parent AS parent, n.file AS file, labels(n)[0] AS type "
+                    "ORDER BY size(n.name) LIMIT 5",
+                    term=term, pid=project_id,
+                ).data()
+                if suggestions:
+                    via = "partial-name"
+                    best = suggestions[0]
+                    resolved_name = f"{best['parent']}.{best['name']}" if best.get('parent') else best['name']
+                    row = session.run(
+                        f"MATCH (n {{name: $name}}) WHERE 1=1 {pid_clause} "
+                        "WITH n, CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END AS p "
+                        "ORDER BY p LIMIT 1 "
+                        "OPTIONAL MATCH (caller)-[:CALLS]->(n) "
+                        "OPTIONAL MATCH (n)-[:CALLS]->(callee) "
+                        "RETURN n, count(DISTINCT caller) AS ncallers, "
+                        "collect(DISTINCT callee.name)[..5] AS callees",
+                        name=best['name'], pid=project_id,
+                    ).single()
+
+        client.driver.close()
+
+        if not row:
+            print(f"No match found for '{query}'")
+            print(f"  Try: smt grep \"{query}\" or smt search \"{query}\"")
+            return 1
+
+        n = row["n"]
+        ncallers = row["ncallers"] or 0
+        callees = [c for c in (row["callees"] or []) if c]
+        labels = list(n.labels)
+        file_str = n.get("file", "?")
+        try:
+            display = str(Path(file_str).relative_to(project_path))
+        except (ValueError, TypeError):
+            display = file_str
+
+        if compact:
+            via_note = f" [{via}]" if via != "exact" else ""
+            print(f"Lookup: {n['name']}  [{', '.join(labels)}]{via_note}  {display}:{n.get('line', '?')}")
+            if n.get("signature"):
+                print(f"sig: {n.get('signature')}")
+        else:
+            via_note = f"\n  via: {via}" if via != "exact" else ""
+            print(f"\nLookup: {query!r} → {n['name']}  [{', '.join(labels)}]{via_note}")
+            print(f"  {display}:{n.get('line', '?')}")
+            if n.get("signature") and not brief:
+                print(f"  sig: {n.get('signature')}")
+            if n.get("docstring") and not brief:
+                first_line = n.get("docstring", "").splitlines()[0].strip()[:120]
+                print(f"  doc: {first_line}")
+
+        if ncallers:
+            print(f"\n  callers: {ncallers}")
+        if callees:
+            print(f"  calls ({len(callees)}): {', '.join(callees)}")
+
+        return 0
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return 1
+
+
 def cmd_explain(symbol: str, depth: int = 2) -> int:
     """Print a Claude-ready explanation prompt for a symbol."""
     project_path = _resolve_project_path()

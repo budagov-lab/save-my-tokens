@@ -53,7 +53,9 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
             if resolved:
                 subgraph = client.get_bounded_subgraph(resolved, max_depth=max_depth, file_filter=file_filter)
         if not subgraph:
-            print(f"Symbol '{symbol}' not found in graph.")
+            pid_clause = "AND n.project_id = $pid" if _get_project_id(project_path) else ""
+            _print_not_found(symbol, client, pid_clause, _get_project_id(project_path),
+                             project_path, project_path / '.smt' / 'embeddings')
             client.driver.close()
             return 1
 
@@ -177,8 +179,35 @@ def cmd_context(symbol: str, depth: int = 1, callers: bool = False,
         return 1
 
 
-def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str, project_path):
-    """When exact name match fails: try Class.method split, then show partial-name suggestions."""
+def _print_not_found(symbol: str, client, pid_clause: str, project_id: str, project_path, cache_dir) -> None:
+    """Print 'not found' with graph name suggestions and semantic fallback.
+
+    Used by context/impact/definition when all resolution attempts fail.
+    """
+    term = symbol.rsplit('.', 1)[-1]
+    with client.driver.session() as s:
+        suggestions = s.run(
+            f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower($term) {pid_clause} "
+            "RETURN n.name AS name, n.parent AS parent, n.file AS file, labels(n)[0] AS type "
+            "ORDER BY size(n.name) LIMIT 5",
+            term=term, pid=project_id,
+        ).data()
+
+    print(f"Symbol '{symbol}' not found in graph.")
+    if suggestions:
+        print("  Did you mean:")
+        for s in suggestions:
+            qname = f"{s['parent']}.{s['name']}" if s.get('parent') else s['name']
+            try:
+                display = str(Path(s['file']).relative_to(project_path))
+            except (ValueError, TypeError):
+                display = s['file'] or '?'
+            print(f"    {qname}  [{s['type']}]  ({display})")
+    print(f"\n  Try: smt lookup \"{symbol}\"")
+
+
+def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str, project_path, cache_dir):
+    """When exact name match fails: try Class.method split, then partial-name + semantic suggestions."""
     # Stage 1: user typed Class.method — split and match name + parent
     if '.' in symbol:
         parent_hint, name_part = symbol.rsplit('.', 1)
@@ -192,7 +221,7 @@ def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str,
         if fb:
             return fb
 
-    # Stage 2: partial name match — show suggestions, return None
+    # Stage 2: partial name match
     term = symbol.rsplit('.', 1)[-1]
     suggestions = session.run(
         f"MATCH (n) WHERE toLower(n.name) CONTAINS toLower($term) {pid_clause} "
@@ -212,6 +241,8 @@ def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str,
                 display = s['file'] or '?'
             print(f"    {qname}  [{s['type']}]  ({display})")
         print(f"\n  Or try: smt search \"{term}\"")
+    else:
+        print(f"\n  Try: smt lookup \"{symbol}\"")
     return None
 
 
@@ -267,7 +298,8 @@ def cmd_definition(symbol: str, file_filter: Optional[str] = None,
                 node = session.run(query, name=symbol, pid=project_id).single()
 
             if not node:
-                node = _fallback_definition(session, symbol, pid_clause, project_id, project_path)
+                cache_dir = project_path / '.smt' / 'embeddings'
+                node = _fallback_definition(session, symbol, pid_clause, project_id, project_path, cache_dir)
                 if not node:
                     client.driver.close()
                     return 1
@@ -444,7 +476,10 @@ def cmd_impact(symbol: str, max_depth: int = 3, compress: bool = False,
             if resolved:
                 impact_set = client.get_impact_graph(resolved, max_depth=max_depth)
         if not impact_set:
-            print(f"Symbol '{symbol}' not found in graph.")
+            pid = _get_project_id(project_path)
+            pid_clause = "AND n.project_id = $pid" if pid else ""
+            _print_not_found(symbol, client, pid_clause, pid,
+                             project_path, project_path / '.smt' / 'embeddings')
             client.driver.close()
             return 1
 

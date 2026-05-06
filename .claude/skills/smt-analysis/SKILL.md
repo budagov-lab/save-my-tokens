@@ -93,12 +93,17 @@ smt context resolve_redirects --depth 2 --compact && smt scope exceptions.py
 
 **Never use `cd /d` — that is Windows CMD syntax and fails in bash.** The working directory is already set to the project root; do not `cd` anywhere before running `smt` commands.
 
-**Symbol not found? Recovery ladder (stop at first hit):**
-1. `smt view Class.method` — dotted name automatically retries with parent+name split
-2. `smt definition X` — tries dotted split and shows "did you mean" suggestions automatically
-3. `smt grep <name>` — substring match on symbol names/docstrings; use bare name without `def`/`class`
-4. `smt scope <file.py>` — see every symbol in the file; pick the exact name
-5. `smt search "description"` — semantic search; only if embeddings were built (`smt build --embeddings`)
+**Symbol not found? Use `smt lookup` first — it tries all graph-based strategies automatically:**
+```
+smt lookup <name>          # exact → dot-notation → partial-name (all in one command)
+```
+- `smt lookup Session.resolve_redirects` — resolves dot-notation automatically
+- `smt lookup resolve_redirect` — partial-name match finds `resolve_redirects`
+- Shows `[dot-notation]` or `[partial-name]` tag so you know how it matched
+
+**If `smt lookup` also fails:**
+1. `smt grep <name>` — substring match on symbol names/docstrings; use bare name without `def`/`class`
+2. `smt scope <file.py>` — see every symbol in the file; pick the exact name
 
 ---
 

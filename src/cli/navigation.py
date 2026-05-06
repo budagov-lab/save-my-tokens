@@ -1,5 +1,6 @@
 """SMT navigation commands: list, path, scope."""
 
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -255,14 +256,15 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
             if s['name'] not in exported_names and s['name'] not in imported_names
         ]
 
-        print(f"\nScope: {display}\n")
-        print(f"  {len(all_syms)} symbols total  |  "
-              f"{len(exports)} exported  |  "
-              f"{len(imports)} imported  |  "
-              f"{len(internal_syms)} internal\n")
+        out = []
+        out.append(f"\nScope: {display}\n")
+        out.append(f"  {len(all_syms)} symbols total  |  "
+                   f"{len(exports)} exported  |  "
+                   f"{len(imports)} imported  |  "
+                   f"{len(internal_syms)} internal\n")
 
         if exports:
-            print(f"  exports — called by other files ({len(exports)}):")
+            out.append(f"  exports — called by other files ({len(exports)}):\n")
             for r in exports:
                 caller_files = [Path(f).name for f in (r.get('sample_files') or [])]
                 suffix = (f"  <- {r['external_callers']} caller{'s' if r['external_callers'] != 1 else ''}"
@@ -270,36 +272,37 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
                 doc = r.get('docstring') or ''
                 doc_line = doc.splitlines()[0].strip()[:60] if doc else ''
                 doc_suffix = f"  # {doc_line}" if doc_line else ""
-                print(f"    {r['name']:<45} [{r['type']}]{suffix}{doc_suffix}")
+                out.append(f"    {r['name']:<45} [{r['type']}]{suffix}{doc_suffix}\n")
 
         if imports:
             from collections import defaultdict
             by_src: dict = defaultdict(list)
             for r in imports:
                 by_src[r['dep_file']].append(r)
-            print(f"\n  imports — calls into other files ({len(imports)} symbols from {len(by_src)} files):")
+            out.append(f"\n  imports — calls into other files ({len(imports)} symbols from {len(by_src)} files):\n")
             for dep_file in sorted(by_src):
                 deps = by_src[dep_file]
                 try:
                     dep_display = str(Path(dep_file).relative_to(project_path))
                 except ValueError:
                     dep_display = Path(dep_file).name
-                print(f"    from {dep_display}:")
+                out.append(f"    from {dep_display}:\n")
                 for dep in deps:
-                    print(f"      {dep['name']}  [{dep['type']}]")
+                    out.append(f"      {dep['name']}  [{dep['type']}]\n")
 
         if internal_syms:
             import os as _os2
             if _os2.environ.get("SMT_AGENT"):
-                print(f"\n  internal — not coupled across files ({len(internal_syms)} symbols)")
-                print(f"  (use smt list --module {Path(display).name} to enumerate)")
+                out.append(f"\n  internal — not coupled across files ({len(internal_syms)} symbols)\n")
+                out.append(f"  (use smt list --module {Path(display).name} to enumerate)\n")
             else:
-                print(f"\n  internal — not directly coupled across files ({len(internal_syms)}):")
+                out.append(f"\n  internal — not directly coupled across files ({len(internal_syms)}):\n")
                 for sym in internal_syms:
                     line_str = f":{sym['line']}" if sym['line'] else ""
-                    print(f"    {sym['name']:<45} [{sym['type']}]{line_str}")
+                    out.append(f"    {sym['name']:<45} [{sym['type']}]{line_str}\n")
 
+        print("".join(out), end="")
         return 0
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR: {e}", file=sys.stderr)
         return 1
