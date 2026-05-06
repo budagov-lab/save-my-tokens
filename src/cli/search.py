@@ -13,15 +13,19 @@ from src.cli._helpers import (
 
 
 def cmd_search(query: str, top_k: int = 5, follow: Optional[str] = None) -> int:
-    from src.config import settings
-
     project_path = _resolve_project_path()
     if not _require_git(project_path):
         return 1
 
     project_id = _get_project_id(project_path)
+    cache_dir = project_path / '.smt' / 'embeddings'
+
+    # Guard: check index file exists before loading the model (avoids HuggingFace download attempt)
+    if not (cache_dir / 'faiss.index').exists():
+        print("Embeddings index not found — run: smt build --embeddings")
+        return 1
+
     try:
-        cache_dir = project_path / '.smt' / 'embeddings'
         svc = _get_embedding_service(cache_dir)
 
         if not svc.load_index():

@@ -124,7 +124,7 @@ from src.cli.build import cmd_build
 
 from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact, cmd_grep
 
-from src.cli.search import cmd_search, cmd_explain, cmd_lookup
+from src.cli.search import cmd_explain, cmd_lookup
 from src.cli.sync import cmd_sync
 from src.cli.onboard import cmd_onboard
 
@@ -149,7 +149,6 @@ commands:
   context <symbol>       Symbol context (bidirectional, bounded)
   context <symbol> --callers  Who calls this symbol
   impact <symbol>        Impact analysis (reverse traversal)
-  search <query>         Semantic search (requires smt build --embeddings)
   sync [range]           Sync graph with git commits (default: HEAD~1..HEAD)
   watch [--debounce N]   Auto-sync graph when files change (live mode)
   explain <symbol>       Print symbol context formatted for Claude to explain
@@ -222,15 +221,6 @@ graph analysis:
     p_impact.add_argument('--compact', action='store_true')
     p_impact.add_argument('--brief', action='store_true')
     p_impact.add_argument('--json', action='store_true')
-
-    # search (semantic, opt-in via smt build --embeddings)
-    p_search = sub.add_parser('search', help='Semantic search (requires smt build --embeddings)')
-    p_search.add_argument('query')
-    p_search.add_argument('--top', type=int, default=5)
-    p_search.add_argument('--json', action='store_true')
-    follow_grp = p_search.add_mutually_exclusive_group()
-    follow_grp.add_argument('--context', action='store_true')
-    follow_grp.add_argument('--impact', action='store_true')
 
     # lookup (unified resolver: exact → dot-notation → partial-name)
     p_lookup = sub.add_parser('lookup', help='Unified resolver: exact → dot-notation → partial-name match')
@@ -394,14 +384,6 @@ graph analysis:
             return 0 if result.found else 1
         return cmd_impact(args.symbol, max_depth=depth, compress=args.compress,
                          compact=getattr(args, 'compact', False), brief=getattr(args, 'brief', False))
-    elif args.command == 'search':
-        if getattr(args, 'json', False):
-            engine = _get_engine()
-            results = engine.search(args.query, top_k=args.top)
-            print(json.dumps(results.model_dump(), indent=2))
-            return 0
-        follow = 'context' if getattr(args, 'context', False) else ('impact' if getattr(args, 'impact', False) else None)
-        return cmd_search(args.query, top_k=args.top, follow=follow)
     elif args.command == 'lookup':
         return cmd_lookup(args.query,
                           compact=getattr(args, 'compact', False),
