@@ -12,7 +12,7 @@ Usage:
     smt context <symbol>           # What do I need to work on this? (bounded, bidirectional)
     smt context <symbol> --callers # Who calls this symbol
     smt impact <symbol>            # What breaks if I change this? (reverse traversal)
-    smt search <query>             # Semantic search
+    smt grep <pattern>             # Text search across symbol names and docstrings
     smt sync [range]               # Sync graph after commits (default: HEAD~1..HEAD)
 
     smt start                      # Start Neo4j container

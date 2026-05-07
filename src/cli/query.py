@@ -440,7 +440,7 @@ def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int 
         label = f"{symbol}  [{', '.join(n.labels)}]"
         range_str = f"lines {start + 1}–{end}" + (f"  (end_line not in graph — showing window)" if not line_end else "")
         if truncated:
-            range_str += f"  (truncated at {_LINE_CAP} lines — use smt view {symbol} without --compact to see all)"
+            range_str += f"  (truncated at {_LINE_CAP} lines — use Read with offset={start + 1} limit=120 for the full body)"
         print(f"\n{label}")
         print(f"  {file_path}:{line_start}  {range_str}\n")
 

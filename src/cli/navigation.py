@@ -189,6 +189,9 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
             print(f"No symbols found for file filter: {file_filter!r}")
             if not Path(normalized).suffix:
                 print(f"  Tip: include the file extension (e.g. '{file_filter}.py')")
+            else:
+                stem = Path(normalized).stem
+                print(f"  Tip: file not indexed — try: smt grep --module {stem}")
             return 1
 
         if len(file_rows) > 1 and dir_filter:
