@@ -4,204 +4,73 @@ description: "Analyze codebase structure, assess change impact, and find indepen
 argument-hint: [symbol-or-question]
 ---
 
-# SMT Code Graph Analyst
+# SMT Analyst
 
-**Task:** $ARGUMENTS
+**Task:** $ARGUMENTS — facts and analysis only. No file edits.
 
-You are a single-agent code graph analyst. Your tools are the `smt` CLI commands. You do not edit files. You do not write code. You report facts and reasoned analysis only.
-
----
-
-## Graph Status
+## Pre-flight
 
 !`smt status`
 
-| Status line shows | Action |
+| Result | Action |
 |---|---|
 | `[✓] fresh` | Proceed |
-| `[!] N commits behind` | Run `smt sync`, then proceed |
-| Neo4j unreachable | Stop — tell user: `smt start` |
+| `[!] N behind` | `smt sync` then proceed |
 | 0 nodes | Stop — tell user: `smt build` |
+| unreachable | Stop — tell user: `smt start` |
 
-Never query a stale or empty graph — answers will be wrong.
+## Orient first
 
----
+Unknown symbol name? Run `smt scope <file.py>` — lists every symbol in the file. Batch independent lookups with `&&`.
 
-## Pipeline
-
-- [ ] Graph is fresh (confirmed above)
-- [ ] Scoped relevant files to confirm symbol names before querying
-- [ ] Queries run from the decision table
-- [ ] Callers classified (BREAKING / DEGRADED / UNAFFECTED)
-- [ ] Report includes `file:line` for every symbol
-
----
-
-## Step 2: Orient — Know the exact symbol name first
-
-**If you know the file but not the exact symbol name, run `smt scope` before anything else:**
-
-```bash
-smt scope <basename.py>    # e.g. smt scope sessions.py
-```
-
-This lists every symbol in the file in one turn. Pick the exact name, then query it directly. This is always more precise than `smt search` and avoids guessing with `smt definition`.
-
-**Batch independent lookups with `&&` to save turns:**
-
-```bash
-smt scope sessions.py && smt scope adapters.py
-smt context resolve_redirects --depth 2 --compact && smt scope exceptions.py
-```
-
----
-
-## Step 3: Query — Decision Table
+## Query
 
 | Question | Command |
 |---|---|
 | What is X? | `smt definition X --compact --brief` |
-| What do I need to work on X? | `smt context X --depth 2 --compact` |
+| Work on X? | `smt context X --depth 2 --compact` |
 | Who calls X? | `smt context X --callers` |
-| What breaks if I change X? | `smt impact X --depth 3` |
-| Did X's signature change between commits? | `smt breaking-changes X` · or `smt breaking-changes X --before HEAD~1 --after HEAD` |
-| Show me the code for X | `smt view X` — bare name (`Session`) or dotted (`Session.resolve_redirects`); never a file path |
-| Output too large? | Add `--compress` to `context`/`impact`; only `definition`, `context`, `impact` accept `--compact`/`--brief` |
-| Same symbol name in multiple files? | Add `--file <path-fragment>`: `smt definition X --file adapters` |
-| What's in a module/file? | `smt scope <basename.py>` — basename only: `adapters.py`, not `requests/adapters`. Or `smt list --module <stem>` to filter by type |
-| Find by name/signature/docstring | `smt grep <pattern>` — substring on symbol names/docs; strip `def`/`class` prefix; supports `A\|B` alternation; add `--module <path-fragment>` to scope to a file |
-| Find by concept (semantic) | `smt search "3-10 word query"` — only if `smt grep` gives no results and embeddings were built |
-| How does A depend on B? | `smt path A B` |
-| What changed in this range? | `smt changes [RANGE]` |
-| Dead code? | `smt unused` |
-| Circular deps? | `smt cycles` |
-| Most-called symbols? | `smt hot --top 10` |
-| God functions? | `smt complexity --top 10` |
-| Architectural chokepoints? | `smt bottleneck --top 5` |
-| Files ranked by coupling? | `smt modules` |
-| Layer violations? | `smt layer` |
+| What breaks? | `smt impact X --depth 3` |
+| Signature changed? | `smt breaking-changes X` |
+| Show code | `smt view X` (symbol name, not file path) |
+| File contents? | `smt scope <basename.py>` |
+| Find by name/doc | `smt grep <pattern>` (bare name — no `def`/`class` prefix) |
+| A→B path? | `smt path A B` |
+| Changed symbols? | `smt changes [RANGE]` |
+| Dead code / cycles / hotspots | `smt unused` · `smt cycles` · `smt hot` |
+| God functions / chokepoints / layers | `smt complexity` · `smt bottleneck` · `smt layer` |
 
-**Depth guide:** `--depth 1` immediate · `--depth 2` working context · `--depth 3` full caller tree
+**`--compact --brief`** = minimum tokens. Valid only on `definition`, `context`, `impact` — never on `scope`, `list`, `grep`.  
+**Depth:** 1 = immediate · 2 = working context · 3 = full tree  
+**Output too large?** Add `--compress` to `context` or `impact`.  
+**Same symbol in multiple files?** Add `--file <fragment>` to any command.
 
-**Token flags** — only valid on `definition`, `context`, `impact`:
-- `--compact` — ~40-60% fewer tokens. Always start here.
-- `--brief` — suppress docstrings. Combine: `--compact --brief` = minimum output.
-
-**NEVER use `--compact`, `--brief`, or `--span` with `search`, `list`, or `scope` — these flags do not exist on those commands and will error.**
-
-**`smt grep` searches symbol names and docstrings — not source code text.** Do NOT pass source patterns like `def resolve_redirects` or `socket.timeout`. Strip the `def`/`class` keyword and grep the bare name.
-
-**Never use `cd /d` — that is Windows CMD syntax and fails in bash.** The working directory is already set to the project root; do not `cd` anywhere before running `smt` commands.
-
-**Symbol not found? Use `smt lookup` first — it tries all graph-based strategies automatically:**
-```
-smt lookup <name>          # exact → dot-notation → partial-name (all in one command)
-```
-- `smt lookup Session.resolve_redirects` — resolves dot-notation automatically
-- `smt lookup resolve_redirect` — partial-name match finds `resolve_redirects`
-- Shows `[dot-notation]` or `[partial-name]` tag so you know how it matched
-
-**If `smt lookup` also fails:**
-1. `smt grep <name>` — substring match on symbol names/docstrings; use bare name without `def`/`class`
-2. `smt scope <file.py>` — see every symbol in the file; pick the exact name
-
----
-
-## Step 4: Reason
-
-### Impact Analysis
-
-For each caller from `smt impact`, classify:
-
-| Label | Meaning |
-|---|---|
-| **Breaking** | Won't compile or run after the change |
-| **Degraded** | Runs but with warnings or reduced functionality |
-| **Unaffected** | No observable effect |
-
-**Safe change order — leaf-first:**
-1. Symbols with no callers (leaves)
-2. Mid-level callers
-3. CLI entry points and public API (roots)
-
-**Always check for hidden risks:**
-- Dynamic calls (`getattr`, `import *`, `importlib.import_module`) — invisible to the static graph
-- Module-level state (globals, class-level defaults) — load-order sensitive
-- Multiple inheritance paths — may need coordinated updates
-- Test files in the caller list — list them explicitly
-
-**Assess atomicity:** one commit, or must changes be sequenced?
-
-### Isolation Analysis
-
-1. `smt list --module <stem>` — enumerate symbols in target area
-2. `smt context X --depth 2 --compact` — map internal edges per key symbol
-3. `smt impact X --depth 3 --compact` — check for external callers
-4. `smt bottleneck` — find shared bridge symbols
-
-Classify each symbol: **Internal only** · **External API** · **Bridge**
-
-Output: safe parallel groupings where each group has no shared dependencies.
-
----
-
-## Step 5: Report
-
-Always include `file:line` for every symbol. Always include the freshness line from `smt status`.
-
-### Impact report
+## Symbol not found
 
 ```
-Symbol: <name> (<file:line>)
-Freshness: [✓] fresh | [!] N commits behind
-
-Direct callers (N):
-  <caller> (<file:line>) — BREAKING | DEGRADED | UNAFFECTED
-
-Transitive callers (depth 2+):
-  <caller> (<file:line>) — BREAKING | DEGRADED | UNAFFECTED
-
-Test files at risk: <test_file> — <reason>
-Hidden risks: none | <description>
-
-Safe change order:
-  Step 1: <what, where>
-  Step 2: <what, where>
-
-Atomicity: one commit | N commits (<reason>)
+smt lookup X          # exact → dot-notation → partial (try first)
+smt grep X            # substring on names + docstrings
+smt scope <file.py>   # pick exact name from file listing
 ```
 
-### Isolation report
+## Reason — Impact
 
-```
-Target: <module or file>
-Symbols analyzed: N  |  Independent components: N
+Classify each caller from `smt impact`:  
+**Breaking** (won't compile/run) · **Degraded** (runs with reduced functionality) · **Unaffected**
 
-Component 1: <name>
-  Symbols: A, B, C
-  Internal deps: A -> B -> C
-  External callers: <file:line>
-  Status: ISOLATED | HAS_EXTERNAL_API
+Safe change order: leaves first → mid-level callers → roots/public API.
 
-Bridges (change carefully):
-  <symbol> (<file:line>) — used by Component 1 and 2
+Hidden risks to flag: `getattr`/`importlib` dynamic calls (invisible to graph) · module-level state · multiple inheritance · test files in caller list.
 
-Safe parallel work:
-  Group A: Component 1  |  Group B: Component 2
-  Sequence: Bridges must resolve before either group merges
-```
+## Report
 
----
+Lead with the freshness line from `smt status`. Include `file:line` for every symbol.
 
-## Escalation Rules
+Impact report must cover: direct callers + transitive callers + test files at risk + hidden risks + safe change order + atomicity (one commit or sequenced?).
 
-Stop and ask the user when:
+## Stop and ask when
 
-| Situation | Action |
-|---|---|
-| Symbol not found | Use the recovery ladder above |
-| Graph stale > 5 commits and `smt sync` fails | Tell user: `smt build --clear` |
-| Target area has 100+ symbols | "Too broad — which file or class specifically?" |
-| Same symbol name in multiple files | Retry with `--file <path-fragment>`: `smt definition X --file adapters` |
-| Neo4j offline and `smt start` fails | "Docker not running — start Docker Desktop first" |
-| Change affects 50+ callers | "Very high blast radius. Confirm you want full analysis?" |
+- Symbol still missing after lookup + grep + scope
+- Graph >5 commits stale and `smt sync` fails → tell user: `smt build --clear`
+- Target has 100+ symbols → "Which file or class specifically?"
+- 50+ callers → confirm before running full analysis
