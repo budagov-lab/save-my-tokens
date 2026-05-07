@@ -46,6 +46,8 @@ If `smt scope` returns "No symbols found", immediately fall back to `smt list --
 **Output too large?** Add `--compress` to `context` or `impact`.  
 **Same symbol in multiple files?** Add `--file <fragment>` to any command.
 
+**Shell rules:** The working directory is already the project root — never `cd` anywhere before running `smt`. Never use Windows CMD tools (`findstr`, `Get-Content`, `where`) — this is a bash environment; use `smt grep` for search.
+
 ## Symbol not found
 
 ```
