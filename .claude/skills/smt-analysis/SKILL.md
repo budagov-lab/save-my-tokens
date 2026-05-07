@@ -10,70 +10,94 @@ argument-hint: [symbol-or-question]
 
 ## Pre-flight
 
-!`smt status`
+!`smt status 2>&1 | head -5`
 
-| Result | Action |
+## Auto-context (symbols found in this task)
+
+!`smt orient $ARGUMENTS 2>/dev/null`
+
+| Status | Action |
 |---|---|
 | `[✓] fresh` | Proceed |
-| `[!] N behind` | `smt sync` then proceed |
+| `[!] N behind` | `smt sync` if N ≤ 10; otherwise proceed (line numbers may drift slightly) |
 | 0 nodes | Stop — tell user: `smt build` |
 | unreachable | Stop — tell user: `smt start` |
 
-## Orient first
+## Turn 1 — run this immediately, before reasoning
 
-Unknown symbol name? Run `smt scope <file.py>` — lists every symbol in the file. Batch independent lookups with `&&`.  
-If `smt scope` returns "No symbols found", immediately fall back to `smt list --module <stem>` (same graph, more tolerant filter). Do not retry `smt scope` with variations.
+Extract the 1-3 key symbol names from the task. Run ONE compound command covering all of them:
 
-## Query
+```bash
+smt grep <term1> && smt grep <term2>
+```
 
-| Question | Command |
+Then in the SAME turn (chain with `&&`) or the very next turn:
+
+```bash
+smt context <symbol> --depth 2 --compact --compress && smt view <symbol>
+```
+
+`smt context` → call graph (callers + callees).  `smt view` → actual source lines.  
+**After these two commands you have everything needed for most tasks. Write your report.**
+
+### Task-type shortcuts
+
+| Task says | Run first |
 |---|---|
-| What is X? | `smt definition X --compact --brief` |
-| Work on X? | `smt context X --depth 2 --compact` |
-| Who calls X? | `smt context X --callers` |
-| What breaks? | `smt impact X --depth 3` |
-| Signature changed? | `smt breaking-changes X` |
-| Show code | `smt view X` (symbol name, not file path) |
-| File contents? | `smt scope <basename.py>` |
-| Find by name/doc | `smt grep <pattern>` (bare name — no `def`/`class` prefix) |
-| A→B path? | `smt path A B` |
-| Changed symbols? | `smt changes [RANGE]` |
-| Dead code / cycles / hotspots | `smt unused` · `smt cycles` · `smt hot` |
-| God functions / chokepoints / layers | `smt complexity` · `smt bottleneck` · `smt layer` |
+| "where is X" / "how does X work" | `smt grep X && smt view X` |
+| "what do I need to work on X" | `smt context X --depth 2 --compact && smt view X` |
+| "what breaks if I change X" | `smt impact X --depth 3` |
+| "who calls X" | `smt context X --callers` |
+| file name mentioned | `smt scope requests/file.py` (use full relative path) |
+| broad concept, no symbol | `smt grep <concept>` then pick symbols from results |
 
-**`--compact --brief`** = minimum tokens. Valid only on `definition`, `context`, `impact` — never on `scope`, `list`, `grep`.  
-**Depth:** 1 = immediate · 2 = working context · 3 = full tree  
-**Output too large?** Add `--compress` to `context` or `impact`.  
-**Same symbol in multiple files?** Add `--file <fragment>` to any command.
-
-**Shell rules:** The working directory is already the project root — never `cd` anywhere before running `smt`. Never use Windows CMD tools (`findstr`, `Get-Content`, `where`) — this is a bash environment; use `smt grep` for search.
+Batch independent queries with `&&` — never waste a turn on a single lookup.
 
 ## Symbol not found
 
+If `smt definition X` or `smt view X` returns "not found":
+
+```bash
+smt grep X            # searches names + docstrings — use this first
+smt scope <file.py>   # list what symbols actually exist in the file
 ```
-smt lookup X          # exact → dot-notation → partial (try first)
-smt grep X            # substring on names + docstrings
-smt scope <file.py>   # pick exact name from file listing
-```
 
-## Reason — Impact
+Do NOT try `smt lookup X` — it also fails for symbols not in the graph.  
+If `smt grep X` returns nothing: the symbol may not exist in this checkout. Use `smt scope <likely_file.py>` to see what IS there.
 
-Classify each caller from `smt impact`:  
-**Breaking** (won't compile/run) · **Degraded** (runs with reduced functionality) · **Unaffected**
+## When more depth is needed
 
-Safe change order: leaves first → mid-level callers → roots/public API.
+| Need | Command |
+|---|---|
+| Full caller tree | `smt impact X --depth 3` |
+| Symbol in multiple files | Add `--file <fragment>` to any command |
+| Is file path ambiguous? | `smt scope requests/exceptions.py` (full path, not basename) |
+| Contract change check | `smt breaking-changes X` |
+| Shortest dependency path | `smt path A B` |
+| Dead code / hotspots | `smt unused` · `smt hot` · `smt complexity` |
 
-Hidden risks to flag: `getattr`/`importlib` dynamic calls (invisible to graph) · module-level state · multiple inheritance · test files in caller list.
+**`--compact --brief`** = minimum tokens. Valid on `definition`, `context`, `impact` only.  
+**`--compress`** = removes bridge forwarders from context/impact output.  
+**Output too large?** Add `--compress` then `--depth 1`.
 
-## Report
+## Hard stops — do NOT do these
 
-Lead with the freshness line from `smt status`. Include `file:line` for every symbol.
+- `cd` anywhere — the working directory is already the project root  
+- `findstr`, `Get-Content`, `Select-String` — this is bash; use `smt grep`  
+- `Read <file>` after `smt view` — smt view already shows the source lines  
+- Re-running the same query to "verify" — trust the first result  
+- Using `smt view X --depth N` — `--depth` is not a view flag; use `smt context X --depth N`  
 
-Impact report must cover: direct callers + transitive callers + test files at risk + hidden risks + safe change order + atomicity (one commit or sequenced?).
+## Sufficient — stop exploring when you have
 
-## Stop and ask when
+1. File path + line number for the symbol  
+2. What it calls (from `smt context`)  
+3. Who calls it (from `smt context` or `smt impact`)  
+4. The actual code (from `smt view`)  
 
-- Symbol still missing after lookup + grep + scope
-- Graph >5 commits stale and `smt sync` fails → tell user: `smt build --clear`
-- Target has 100+ symbols → "Which file or class specifically?"
-- 50+ callers → confirm before running full analysis
+That is enough. Write the report. Do not keep exploring.
+
+## Report format
+
+Lead with graph freshness from pre-flight. Include `file:line` for every symbol mentioned.  
+Impact analysis: direct callers → transitive callers → test files → hidden risks (`getattr`, dynamic imports) → safe change order.

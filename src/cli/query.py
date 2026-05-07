@@ -447,6 +447,18 @@ def cmd_view(symbol: str, file_filter: Optional[str] = None, context_lines: int 
         lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
         total = len(lines)
 
+        # Graph line numbers can be stale (1-2 commits behind). Scan ±20 lines for the
+        # actual def/class to correct for drift before slicing the display window.
+        sym_bare = symbol.rsplit(".", 1)[-1]  # strip Class. prefix if present
+        search_start = max(0, line_start - 20)
+        search_end = min(total, line_start + 20)
+        for probe in range(search_start, search_end):
+            stripped = lines[probe].lstrip()
+            if stripped.startswith(f"def {sym_bare}(") or stripped.startswith(f"async def {sym_bare}(") \
+                    or stripped.startswith(f"class {sym_bare}(") or stripped.startswith(f"class {sym_bare}:"):
+                line_start = probe + 1  # correct to 1-indexed
+                break
+
         # line numbers are 1-indexed; fall back to 30-line window if end_line missing
         start = max(0, line_start - 1 - context_lines)
         end = min(total, (line_end if line_end else line_start + 29) + context_lines)
@@ -727,3 +739,103 @@ def cmd_grep(pattern: str, field: Optional[str] = None,
         print(f"ERROR: {e}")
         logger.error(f"cmd_grep error: {traceback.format_exc()}")
         return 1
+
+
+# ---------------------------------------------------------------------------
+# orient
+# ---------------------------------------------------------------------------
+
+_STOP_WORDS = {
+    "about", "after", "also", "around", "argument", "before", "between",
+    "broad", "call", "calls", "change", "class", "code", "concept", "could",
+    "define", "defined", "does", "entry", "every", "file", "files", "find",
+    "first", "from", "function", "handle", "handles", "handling", "have",
+    "here", "hook", "hooks", "implement", "implemented", "immediately",
+    "improve", "into", "just", "library", "look", "main", "make", "method",
+    "methods", "need", "only", "other", "place", "point", "points", "return",
+    "should", "some", "struct", "structure", "symbol", "than", "that",
+    "their", "then", "there", "these", "this", "those", "understand", "used",
+    "using", "what", "when", "where", "which", "will", "with", "work",
+    "would", "write", "your",
+}
+
+
+def cmd_orient(task_words: list) -> int:
+    """Pre-orient: extract symbol-like terms from task text and grep the graph for each.
+
+    Designed to be run as the first command in the smt-analysis skill via:
+        !`smt orient $ARGUMENTS`
+    The output is injected into the skill prompt so the agent starts with
+    relevant graph context already visible, reducing lookup turns.
+    """
+    task = " ".join(task_words)
+
+    # Extract CamelCase (likely class/method names) and long snake_case (likely function names).
+    camel = re.findall(r'\b[A-Z][a-z][A-Za-z]{2,}\b', task)
+    snake = re.findall(r'\b[a-z][a-z_]{4,}\b', task)
+    candidates = camel + snake  # CamelCase first — more specific
+
+    seen: set = set()
+    terms: list = []
+    for c in candidates:
+        low = c.lower()
+        if low not in _STOP_WORDS and low not in seen:
+            seen.add(low)
+            terms.append(c)
+        if len(terms) >= 5:
+            break
+
+    if not terms:
+        return 0  # nothing to orient on — agent will figure it out
+
+    project_path = _resolve_project_path()
+    if not _require_git(project_path):
+        return 0  # silently skip if not in a git repo
+
+    project_id = _get_project_id(project_path)
+    try:
+        client = _get_neo4j_client(project_id)
+        pid_clause = "AND n.project_id = $pid" if project_id else ""
+        print("## Graph context (auto-extracted from task)\n")
+
+        found_any = False
+        for term in terms:
+            with client.driver.session() as session:
+                # Match names only (not docstrings) so we find actual symbols,
+                # not accidental docstring hits on common English words.
+                rows = session.run(
+                    f"""
+                    MATCH (n)
+                    WHERE toLower(n.name) CONTAINS toLower($pat)
+                    AND NOT n:File AND NOT n:Module
+                    {pid_clause}
+                    RETURN n.name AS name, labels(n)[0] AS ltype, n.file AS file, n.line AS line
+                    ORDER BY
+                      CASE WHEN toLower(n.name) = toLower($pat) THEN 0 ELSE 1 END,
+                      n.file
+                    LIMIT 6
+                    """,
+                    pat=term, pid=project_id
+                ).data()
+
+            if not rows:
+                continue
+
+            found_any = True
+            print(f"### {term}")
+            for r in rows:
+                try:
+                    display = str(Path(r['file']).relative_to(project_path)) if r.get('file') else '?'
+                except (ValueError, TypeError):
+                    display = r.get('file') or '?'
+                print(f"  {r['name']}  [{r['ltype']}]  {display}:{r.get('line', '?')}")
+            print()
+
+        if not found_any:
+            print("(no graph matches for task terms — use smt grep manually)\n")
+
+        return 0
+    except Exception as e:
+        # orient is best-effort — never fail hard
+        logger.debug(f"cmd_orient error: {e}")
+        return 0

@@ -122,7 +122,7 @@ from src.cli.status import cmd_status
 
 from src.cli.build import cmd_build
 
-from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact, cmd_grep
+from src.cli.query import cmd_context, cmd_definition, cmd_view, cmd_impact, cmd_grep, cmd_orient
 
 from src.cli.search import cmd_explain, cmd_lookup
 from src.cli.sync import cmd_sync
@@ -240,6 +240,10 @@ graph analysis:
     p_grep.add_argument('--top', '--head_limit', '--head', dest='top', type=int, default=20)
     p_grep.add_argument('--module', default=None,
                         help='Filter by file path fragment (e.g. --module adapters)')
+
+    # orient (best-effort pre-querying for the smt-analysis skill)
+    p_orient = sub.add_parser('orient', help='Extract symbols from task text and grep the graph (used by skill pre-flight)')
+    p_orient.add_argument('task_text', nargs='+', help='Task description words (e.g. $ARGUMENTS from SKILL.md)')
 
     # sync
     p_sync = sub.add_parser('sync', help='Sync graph with git commits (incremental update)')
@@ -394,6 +398,8 @@ graph analysis:
         return cmd_grep(args.pattern, field=args.field,
                         type_filter=args.type_filter, top=args.top,
                         module=getattr(args, 'module', None))
+    elif args.command == 'orient':
+        return cmd_orient(args.task_text)
     elif args.command == 'sync':
         return cmd_sync(commit_range=args.range, target_dir=args.dir)
     elif args.command == 'watch':
