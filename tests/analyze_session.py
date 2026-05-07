@@ -220,6 +220,53 @@ def smt_subcommand_counts(timeline):
     return counts
 
 
+def find_cd_errors(timeline):
+    """Detect cd to nonexistent path (causes smt to run in wrong cwd or fail outright)."""
+    bad = []
+    for t in timeline:
+        if t["name"] != "Bash" or not t["is_error"]:
+            continue
+        cmd = t["input"].get("command", "").strip()
+        if re.match(r"cd\s+", cmd) and (
+            "No such file" in t["result"] or "bash: line" in t["result"]
+        ):
+            bad.append(cmd[:80])
+    return bad
+
+
+def find_path_errors(timeline):
+    """Detect Windows backslash paths fed to bash tools (grep/find/cat/head) — path gets mangled."""
+    bad = []
+    for t in timeline:
+        if t["name"] != "Bash" or not t["is_error"]:
+            continue
+        cmd = t["input"].get("command", "").strip()
+        if re.search(r"(grep|find|cat|head)\b.*C:\\\\", cmd):
+            bad.append(cmd[:80])
+    return bad
+
+
+def find_scope_ambiguous(timeline):
+    """Detect smt scope returning 'Multiple files match' (ambiguous basename like exceptions.py)."""
+    bad = []
+    for t in timeline:
+        if t["name"] != "Bash" or not t["is_error"]:
+            continue
+        cmd = t["input"].get("command", "").strip()
+        if cmd.startswith("smt scope") and "Multiple files match" in t["result"]:
+            bad.append(cmd[:80])
+    return bad
+
+
+def find_dotenv_errors(timeline):
+    """Count smt command failures caused by python-dotenv parse errors in the project .env."""
+    return sum(
+        1 for t in timeline
+        if t["name"] == "Bash" and t["is_error"]
+        and "python-dotenv could not parse" in t["result"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Analysis helpers — non-Bash tools
 # ---------------------------------------------------------------------------
@@ -366,9 +413,13 @@ def analyze_one(path: str) -> dict:
         flag_errors=find_flag_errors(timeline),
         grep_flag_errors=find_grep_flag_errors(timeline),
         scope_errors=find_scope_errors(timeline),
+        scope_ambiguous=find_scope_ambiguous(timeline),
         list_errors=find_list_errors(timeline),
         regen_count=find_lookup_regenerations(timeline),
         pivot_turn=first_fallback_turn(timeline),
+        cd_errors=find_cd_errors(timeline),
+        path_errors=find_path_errors(timeline),
+        dotenv_errors=find_dotenv_errors(timeline),
         # All tools
         tool_totals=totals,
         tool_errors=errors,
@@ -489,8 +540,21 @@ def print_single(s: dict):
             print(f"  [{status}] {pat}")
 
     # --- SMT-specific failures ---
+    if s["cd_errors"]:
+        print(f"\nCD ERRORS  ({len(s['cd_errors'])} calls)  [cd before smt -> wrong cwd or path not found]")
+        for cmd in s["cd_errors"]:
+            print(f"  {cmd}")
+
+    if s["path_errors"]:
+        print(f"\nWINDOWS PATH ERRORS  ({len(s['path_errors'])} calls)  [C:\\ path in bash -> backslashes stripped]")
+        for cmd in s["path_errors"]:
+            print(f"  {cmd}")
+
+    if s["dotenv_errors"]:
+        print(f"\nDOTENV ERRORS  ({s['dotenv_errors']} calls)  [bad .env -> all smt commands fail]")
+
     if s["grep_flag_errors"]:
-        print(f"\nSMT GREP FLAG ERRORS  ({len(s['grep_flag_errors'])} calls)  [--head/--head_limit not supported; use --top]")
+        print(f"\nSMT GREP FLAG ERRORS  ({len(s['grep_flag_errors'])} calls)  [--head/--head_limit; now fixed with --top alias]")
         for cmd, is_err in s["grep_flag_errors"]:
             status = "FAIL" if is_err else "ok"
             print(f"  [{status}] {cmd}")
@@ -500,11 +564,18 @@ def print_single(s: dict):
         for cmd in s["flag_errors"]:
             print(f"  {cmd[:90]}")
 
+    if s["scope_ambiguous"]:
+        print(f"\nSMT SCOPE AMBIGUOUS  ({len(s['scope_ambiguous'])} calls)  [Multiple files match — use full relative path]")
+        for cmd in s["scope_ambiguous"]:
+            print(f"  {cmd}")
+
     if s["scope_errors"]:
-        print(f"\nSMT SCOPE ERRORS  ({len(s['scope_errors'])} calls)")
-        for cmd, res in s["scope_errors"]:
-            print(f"  CMD: {cmd[:80]}")
-            print(f"  ERR: {res[:60]}")
+        other = [x for x in s["scope_errors"] if x[0] not in s["scope_ambiguous"]]
+        if other:
+            print(f"\nSMT SCOPE OTHER ERRORS  ({len(other)} calls)")
+            for cmd, res in other:
+                print(f"  CMD: {cmd[:80]}")
+                print(f"  ERR: {res[:60]}")
 
     if s["list_errors"]:
         print(f"\nSMT LIST EMPTY  ({len(s['list_errors'])} calls)")
@@ -514,22 +585,28 @@ def print_single(s: dict):
     if s["regen_count"]:
         print(f"\nEMBEDDING REGENERATIONS: {s['regen_count']}  (smt build should pre-build FAISS index)")
 
-    # --- Root causes ---
+    # --- Root causes ranked by impact ---
     causes = []
+    if s["cd_errors"]:
+        causes.append(f"[HIGH] {len(s['cd_errors'])} cd-before-smt errors -> smt runs in wrong dir or fails immediately")
+    if s["dotenv_errors"]:
+        causes.append(f"[HIGH] {s['dotenv_errors']} dotenv parse errors -> every smt command fails until .env is fixed")
     if s["read_blocked"]:
-        causes.append(f"[HIGH] {len(s['read_blocked'])} full-file Read blocks -> wasted turns waiting for hook denial")
+        causes.append(f"[HIGH] {len(s['read_blocked'])} full-file Read blocks -> wasted turns on hook denial")
     if s["grep_blocked"]:
-        causes.append(f"[HIGH] {len(s['grep_blocked'])} Grep tool blocks -> hook forces smt grep; agent should use smt grep directly")
+        causes.append(f"[MED]  {len(s['grep_blocked'])} Grep tool blocks -> should use smt grep directly")
     if s["grep_flag_errors"]:
-        causes.append(f"[HIGH] {len(s['grep_flag_errors'])} smt grep --head/--head_limit -> Exit code 2 -> agent falls back")
+        causes.append(f"[MED]  {len(s['grep_flag_errors'])} smt grep --head/--head_limit (now fixed)")
+    if s["scope_ambiguous"]:
+        causes.append(f"[MED]  {len(s['scope_ambiguous'])} smt scope ambiguous filename -> use requests/exceptions.py")
+    if s["path_errors"]:
+        causes.append(f"[MED]  {len(s['path_errors'])} Windows backslash paths in bash -> path mangled")
     if s["flag_errors"]:
-        causes.append(f"[MED]  {len(s['flag_errors'])} --compact/--brief on unsupported commands")
-    if s["scope_errors"]:
-        causes.append(f"[MED]  {len(s['scope_errors'])} smt scope errors -> fallback to grep/sed")
+        causes.append(f"[LOW]  {len(s['flag_errors'])} --compact/--brief on unsupported commands")
     if s["list_errors"]:
-        causes.append(f"[MED]  {len(s['list_errors'])} smt list --module returning empty")
+        causes.append(f"[LOW]  {len(s['list_errors'])} smt list --module returning empty")
     if s["regen_count"]:
-        causes.append(f"[MED]  {s['regen_count']} embedding regeneration(s)")
+        causes.append(f"[LOW]  {s['regen_count']} embedding regeneration(s)")
     if not causes:
         causes.append("[NONE] No systematic failures detected")
     print(f"\nROOT CAUSES")
@@ -631,6 +708,147 @@ def print_comparison(instance: str, sessions: list, repo: str = "."):
 
 
 # ---------------------------------------------------------------------------
+# Global cross-batch report
+# ---------------------------------------------------------------------------
+
+# Metric name -> (key_in_session, how_to_count)
+# Each metric extracts a scalar from an analyzed session dict.
+_METRICS = [
+    ("total_calls",   lambda s: sum(s["tool_totals"].values())),
+    ("total_errors",  lambda s: sum(s["tool_errors"].values())),
+    ("Bash",          lambda s: s["tool_totals"].get("Bash", 0)),
+    ("Read",          lambda s: s["tool_totals"].get("Read", 0)),
+    ("Skill",         lambda s: s["tool_totals"].get("Skill", 0)),
+    ("Edit",          lambda s: s["tool_totals"].get("Edit", 0)),
+    ("Grep_tool",     lambda s: s["tool_totals"].get("Grep", 0)),
+    ("smt_ok",        lambda s: s["smt_ok"]),
+    ("smt_err",       lambda s: s["smt_err"]),
+    ("bash_fallback", lambda s: s["fallback"]),
+    ("Read_blocked",  lambda s: len(s["read_blocked"])),
+    ("Read_partial",  lambda s: len(s["read_partial"])),
+    ("Grep_blocked",  lambda s: len(s["grep_blocked"])),
+    ("cd_errors",     lambda s: len(s["cd_errors"])),
+    ("path_errors",   lambda s: len(s["path_errors"])),
+    ("dotenv_errors", lambda s: s["dotenv_errors"]),
+    ("grep_flags",    lambda s: len(s["grep_flag_errors"])),
+    ("scope_ambig",   lambda s: len(s["scope_ambiguous"])),
+    ("flag_errors",   lambda s: len(s["flag_errors"])),
+    ("scope_errors",  lambda s: len(s["scope_errors"])),
+    ("list_errors",   lambda s: len(s["list_errors"])),
+    ("cost_usd",      lambda s: s["cost"] or 0),
+    ("turns",         lambda s: s["turns"] or 0),
+]
+
+
+def _batch_label(s: dict) -> str:
+    """Return 'T15' or 'T17' (or the hour) based on the session timestamp."""
+    ts = parse_ts(s["stem"])
+    return ts[11:13] if ts else "??"
+
+
+def print_global_report(all_sessions: list):
+    """Print a cross-batch comparison table for every tool-call metric."""
+    # Group into batches by hour (T15 vs T17 or generic A/B)
+    batch_map: dict = defaultdict(list)
+    for s in all_sessions:
+        batch_map[_batch_label(s)].append(s)
+
+    batches = sorted(batch_map.keys())
+    if len(batches) < 2:
+        return  # nothing to compare
+
+    b1_label, b2_label = batches[0], batches[1]
+    b1, b2 = batch_map[b1_label], batch_map[b2_label]
+
+    def agg(sessions, fn):
+        vals = [fn(s) for s in sessions]
+        return sum(vals), sum(vals) / max(len(vals), 1)
+
+    W = 16
+    print("=" * 70)
+    print("GLOBAL CROSS-BATCH COMPARISON  (all sessions)")
+    print("=" * 70)
+    print(f"\n{'Metric':<20} {'batch '+b1_label+' total':>16} {'avg':>6}  {'batch '+b2_label+' total':>16} {'avg':>6}  {'trend':>8}")
+    print("-" * 80)
+
+    regressions = []
+    improvements = []
+
+    for name, fn in _METRICS:
+        t1, a1 = agg(b1, fn)
+        t2, a2 = agg(b2, fn)
+        if name in ("cost_usd",):
+            v1, v2 = f"${t1:.3f}", f"${t2:.3f}"
+            a1s, a2s = f"${a1:.3f}", f"${a2:.3f}"
+        else:
+            v1, v2 = str(int(t1)), str(int(t2))
+            a1s, a2s = f"{a1:.1f}", f"{a2:.1f}"
+
+        delta = t2 - t1
+        if abs(delta) < 0.001:
+            trend = "="
+        elif delta > 0:
+            if t1 < 0.001:
+                trend = f"+{int(t2)} NEW"
+            else:
+                pct = 100 * delta / t1
+                trend = f"+{pct:.0f}%"
+            if name not in ("total_calls", "Bash", "Read", "smt_ok", "Edit", "Read_partial"):
+                regressions.append((name, t1, t2, delta))
+        else:
+            if t1 < 0.001:
+                trend = "="
+            else:
+                pct = 100 * abs(delta) / t1
+                trend = f"-{pct:.0f}%"
+            if name in ("smt_ok",):
+                regressions.append((name, t1, t2, delta))
+            else:
+                improvements.append((name, t1, t2, abs(delta)))
+
+        print(f"  {name:<18} {v1:>16} {a1s:>6}  {v2:>16} {a2s:>6}  {trend:>8}")
+
+    # Per-session tool call breakdown
+    print(f"\nPER-SESSION TOOL CALLS")
+    print(f"  {'session':<38} {'total':>5} {'Bash':>4} {'Read':>4} {'Skill':>5} {'Edit':>4} {'Grep':>4} | {'err':>4} {'rd_blk':>6} {'gr_blk':>6} {'cd_err':>6} {'dotenv':>6}")
+    print("  " + "-" * 100)
+    for s in all_sessions:
+        T = s["tool_totals"]
+        E = s["tool_errors"]
+        ts = parse_ts(s["stem"])
+        inst = s["stem"].split("__smt__")[0].replace("psf__requests-", "")
+        label = f"{inst}  {ts[11:]}"
+        total = sum(T.values())
+        total_err = sum(E.values())
+        print(
+            f"  {label:<38} {total:>5} {T.get('Bash',0):>4} {T.get('Read',0):>4} "
+            f"{T.get('Skill',0):>5} {T.get('Edit',0):>4} {T.get('Grep',0):>4} | "
+            f"{total_err:>4} {len(s['read_blocked']):>6} {len(s['grep_blocked']):>6} "
+            f"{len(s['cd_errors']):>6} {s['dotenv_errors']:>6}"
+        )
+
+    # Summary verdict
+    print(f"\nSUMMARY")
+    if regressions:
+        regressions.sort(key=lambda x: x[3], reverse=True)
+        print(f"  WORSE  ({len(regressions)} metrics increased from {b1_label} to {b2_label}):")
+        for name, v1, v2, delta in regressions:
+            v1s = f"${v1:.3f}" if name == "cost_usd" else str(int(v1))
+            v2s = f"${v2:.3f}" if name == "cost_usd" else str(int(v2))
+            ds  = f"+${delta:.3f}" if name == "cost_usd" else f"+{int(delta)}"
+            print(f"    {name:<18} {v1s:>8} -> {v2s:<8}  ({ds})")
+    if improvements:
+        improvements.sort(key=lambda x: x[3], reverse=True)
+        print(f"  BETTER ({len(improvements)} metrics decreased from {b1_label} to {b2_label}):")
+        for name, v1, v2, delta in improvements:
+            v1s = f"${v1:.3f}" if name == "cost_usd" else str(int(v1))
+            v2s = f"${v2:.3f}" if name == "cost_usd" else str(int(v2))
+            ds  = f"-${delta:.3f}" if name == "cost_usd" else f"-{int(delta)}"
+            print(f"    {name:<18} {v1s:>8} -> {v2s:<8}  ({ds})")
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -659,12 +877,16 @@ if __name__ == "__main__":
         sys.exit(1)
 
     groups = group_by_instance(paths)
+    all_sessions = [analyze_one(p) for inst_paths in groups.values() for p in inst_paths]
+
     if len(groups) == 1 and len(list(groups.values())[0]) == 1:
-        # Single file: just print the report
-        print_single(analyze_one(paths[0]))
+        print_single(all_sessions[0])
     else:
-        # Multi-file: group by instance and compare
         smt_repo = str(Path(__file__).parent.parent)
+        # Global report first
+        print_global_report(all_sessions)
+        # Then per-instance detail
         for instance, inst_paths in sorted(groups.items()):
-            sessions = [analyze_one(p) for p in inst_paths]
-            print_comparison(instance, sessions, repo=smt_repo)
+            inst_sessions = [s for s in all_sessions if s["stem"].startswith(instance)]
+            inst_sessions.sort(key=lambda s: parse_ts(s["stem"]))
+            print_comparison(instance, inst_sessions, repo=smt_repo)
