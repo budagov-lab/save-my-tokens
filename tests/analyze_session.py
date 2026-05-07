@@ -109,89 +109,6 @@ def extract_timeline(events):
 # Analysis helpers — Bash / SMT
 # ---------------------------------------------------------------------------
 
-def classify_bash(cmd: str):
-    cmd = cmd.strip()
-    if cmd.startswith("smt "):
-        parts = cmd.split()
-        sub = parts[1] if len(parts) > 1 else "?"
-        return f"smt:{sub}"
-    for tool in ("grep", "sed", "find", "cat", "head", "tail", "awk", "findstr"):
-        if cmd.startswith(tool) or f" {tool} " in cmd or f"|{tool}" in cmd or f"| {tool}" in cmd:
-            return f"direct:{tool}"
-    if cmd.startswith("git "):
-        return "git"
-    if cmd.startswith("python") or cmd.startswith("pip"):
-        return "python"
-    return "other"
-
-
-def find_flag_errors(timeline):
-    """Detect --compact/--brief used on commands that don't support them."""
-    unsupported = {
-        "search", "view", "list", "scope", "modules", "hot", "unused",
-        "cycles", "bottleneck", "changes", "path", "status", "build", "sync", "grep",
-    }
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash":
-            continue
-        cmd = t["input"].get("command", "")
-        m = re.match(r"smt\s+(\w+)", cmd)
-        if not m:
-            continue
-        sub = m.group(1)
-        if sub in unsupported and re.search(r"--compact|--brief|--span", cmd):
-            bad.append(cmd.strip())
-    return bad
-
-
-def find_grep_flag_errors(timeline):
-    """Detect smt grep called with --head_limit or --head (Exit code 2 unrecognized args)."""
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash":
-            continue
-        cmd = t["input"].get("command", "").strip()
-        if re.match(r"smt\s+grep\b", cmd) and re.search(r"--head(?:_limit)?", cmd):
-            bad.append((cmd[:100], t["is_error"]))
-    return bad
-
-
-def find_scope_errors(timeline):
-    """Detect smt scope called with errors."""
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash" or not t["is_error"]:
-            continue
-        cmd = t["input"].get("command", "").strip()
-        if cmd.startswith("smt scope"):
-            bad.append((cmd, t["result"][:80]))
-    return bad
-
-
-def find_list_errors(timeline):
-    """Detect smt list --module returning nothing despite graph having nodes."""
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash":
-            continue
-        cmd = t["input"].get("command", "").strip()
-        if cmd.startswith("smt list") and "No symbols found" in t["result"]:
-            bad.append((cmd, t["result"][:80]))
-    return bad
-
-
-def find_lookup_regenerations(timeline):
-    """Count times smt lookup triggered full embedding regeneration."""
-    count = 0
-    for t in timeline:
-        if t["name"] == "Bash":
-            cmd = t["input"].get("command", "").strip()
-            if cmd.startswith("smt lookup") and "Generating embeddings" in t["result"]:
-                count += 1
-    return count
-
-
 def compute_smt_vs_fallback(timeline):
     bash = [t for t in timeline if t["name"] == "Bash"]
     smt = [t for t in bash if t["input"].get("command", "").strip().startswith("smt ")]
@@ -220,51 +137,285 @@ def smt_subcommand_counts(timeline):
     return counts
 
 
-def find_cd_errors(timeline):
-    """Detect cd to nonexistent path (causes smt to run in wrong cwd or fail outright)."""
-    bad = []
+def smt_abandonment_turn(timeline):
+    """Return the turn where agent stops using smt entirely and never comes back."""
+    last_smt = None
+    last_bash = None
     for t in timeline:
-        if t["name"] != "Bash" or not t["is_error"]:
+        if t["name"] != "Bash":
             continue
         cmd = t["input"].get("command", "").strip()
-        if re.match(r"cd\s+", cmd) and (
-            "No such file" in t["result"] or "bash: line" in t["result"]
-        ):
-            bad.append(cmd[:80])
-    return bad
+        last_bash = t["turn"]
+        if cmd.startswith("smt "):
+            last_smt = t["turn"]
+    if last_smt is None:
+        return 1
+    if last_bash and last_bash > last_smt + 4:
+        return last_smt
+    return None
 
 
-def find_path_errors(timeline):
-    """Detect Windows backslash paths fed to bash tools (grep/find/cat/head) — path gets mangled."""
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash" or not t["is_error"]:
-            continue
+# ---------------------------------------------------------------------------
+# 18-pattern detector suite
+# ---------------------------------------------------------------------------
+
+def _bash_errs(timeline):
+    return [t for t in timeline if t["name"] == "Bash" and t["is_error"]]
+
+def _bash_all(timeline):
+    return [t for t in timeline if t["name"] == "Bash"]
+
+
+def detect_P01_symbol_not_found(timeline):
+    """smt definition/view/lookup returning 'not found in graph'."""
+    hits = []
+    for t in _bash_errs(timeline):
         cmd = t["input"].get("command", "").strip()
-        if re.search(r"(grep|find|cat|head)\b.*C:\\\\", cmd):
-            bad.append(cmd[:80])
-    return bad
+        if re.match(r"smt\s+(definition|view|lookup)\b", cmd) and "not found in graph" in t["result"]:
+            sym = re.search(r"smt\s+\w+\s+\"?([^\s\"]+)", cmd)
+            hits.append(sym.group(1) if sym else cmd[:60])
+    return hits
 
 
+def detect_P02_view_depth_flag(timeline):
+    """smt view called with --depth (not supported; use smt context)."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if re.search(r"smt\s+view\b.*--depth", t["input"].get("command",""))]
+
+
+def detect_P03_grep_wrong_flag(timeline):
+    """smt grep with --compact / --head / --head_limit (now fixed with alias for --head)."""
+    hits = []
+    for t in _bash_all(timeline):
+        cmd = t["input"].get("command", "").strip()
+        if re.match(r"smt\s+grep\b", cmd) and re.search(r"--compact|--head(?:_limit)?", cmd):
+            hits.append((cmd[:80], t["is_error"]))
+    return hits
+
+
+def detect_P04_unsupported_file_flag(timeline):
+    """--file flag used on smt impact/lookup/grep (only valid on definition/view/context)."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if re.search(r"smt\s+(impact|grep|lookup)\b.*--file", t["input"].get("command",""))]
+
+
+def detect_P05_multiple_symbols(timeline):
+    """smt definition/view returning 'Multiple symbols named X'."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if "Multiple symbols" in t["result"]]
+
+
+def detect_P06_cd_bad_path(timeline):
+    """cd to nonexistent path (skills dir, /smt, /tmp/smt-work, etc.)."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if re.match(r"cd\s+", t["input"].get("command","").strip())
+            and ("No such file" in t["result"] or "bash: line" in t["result"])]
+
+
+def detect_P07_backslash_path(timeline):
+    """Unquoted Windows backslash path fed to bash grep/find/cat/head — bash strips the backslashes."""
+    hits = []
+    for t in _bash_errs(timeline):
+        cmd = t["input"].get("command", "").strip()
+        # unquoted C:\ path: not preceded by a quote
+        if re.search(r"(?<!\")(grep|find|cat|head)\b[^\"]*[A-Z]:\\", cmd):
+            hits.append(cmd[:80])
+    return hits
+
+
+def detect_P08_windows_cmd_tools(timeline):
+    """findstr / Get-Content / Select-String used in bash (only work in PowerShell/CMD)."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if re.search(r"\b(findstr|Get-Content|Select-String)\b", t["input"].get("command",""))]
+
+
+def detect_P09_scope_ambiguous(timeline):
+    """smt scope <basename> matching multiple files — need full relative path."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if "smt scope" in t["input"].get("command","")
+            and "Multiple files match" in t["result"]]
+
+
+def detect_P10_dotenv_errors(timeline):
+    """python-dotenv parse error crashing all smt commands in this project."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if "python-dotenv could not parse" in t["result"]]
+
+
+def detect_P11_view_file_missing(timeline):
+    """smt view symbol that exists in graph but whose source file is missing on disk."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if re.search(r"smt\s+view\b", t["input"].get("command",""))
+            and "File not found" in t["result"]]
+
+
+def detect_P12_pytest_broken(timeline):
+    """pytest run fails with ImportError in conftest — benchmark env can't run tests."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if "pytest" in t["input"].get("command","") and "ImportError" in t["result"]]
+
+
+def detect_P13_wsl_path(timeline):
+    """/mnt/c/ paths used on native Windows bash — WSL path format doesn't exist here."""
+    return [t["input"].get("command","")[:80] for t in _bash_errs(timeline)
+            if "/mnt/c/" in t["input"].get("command","")]
+
+
+def detect_P14_pipe_masks_error(timeline):
+    """smt command piped to head/grep: if smt exits non-zero, head exits 0 masking the error."""
+    hits = []
+    for t in _bash_all(timeline):
+        cmd = t["input"].get("command", "").strip()
+        if not t["is_error"] and re.match(r"smt\s+", cmd) and "|" in cmd:
+            if re.search(r"--output_mode\b", cmd):
+                hits.append(cmd[:80])
+    return hits
+
+
+def detect_P15_read_directory(timeline):
+    """Read tool called on a directory path instead of a file."""
+    return [t["input"].get("file_path","")[-60:] for t in timeline
+            if t["name"] == "Read" and t["is_error"] and "EISDIR" in t["result"]]
+
+
+def detect_P16_read_empty_offset(timeline):
+    """Read blocked: agent passed offset='' (empty string) — hook treats it as no offset."""
+    hits = []
+    for t in timeline:
+        if t["name"] != "Read" or not t["is_error"]:
+            continue
+        if "Full-file read blocked" not in t["result"]:
+            continue
+        offset = t["input"].get("offset", None)
+        if offset == "" or offset == 0:
+            fp = Path(t["input"].get("file_path","")).name
+            hits.append(f"{fp} (offset={repr(offset)})")
+    return hits
+
+
+def detect_P17_read_blocked(timeline):
+    """Read blocked: no offset provided — hook requires SMT lookup first."""
+    hits = []
+    for t in timeline:
+        if t["name"] != "Read" or not t["is_error"]:
+            continue
+        if "Full-file read blocked" not in t["result"]:
+            continue
+        offset = t["input"].get("offset", None)
+        if offset not in ("", 0):
+            fp = Path(t["input"].get("file_path","")).name
+            hits.append(fp)
+    return hits
+
+
+def detect_P18_grep_tool_blocked(timeline):
+    """Grep tool blocked by hook — agent should use 'smt grep' directly."""
+    hits = []
+    for t in timeline:
+        if t["name"] == "Grep" and t["is_error"] and "Grep blocked" in t["result"]:
+            hits.append(t["input"].get("pattern","")[:60])
+    return hits
+
+
+def detect_P19_lookup_regen(timeline):
+    """smt lookup triggered full embedding re-generation (FAISS not pre-built)."""
+    return sum(1 for t in _bash_all(timeline)
+               if t["input"].get("command","").strip().startswith("smt lookup")
+               and "Generating embeddings" in t["result"])
+
+
+def detect_P20_list_empty(timeline):
+    """smt list --module returning nothing despite graph having nodes."""
+    return [t["input"].get("command","")[:80] for t in _bash_all(timeline)
+            if t["input"].get("command","").strip().startswith("smt list")
+            and "No symbols found" in t["result"]]
+
+
+# Aggregate all patterns into one dict for a session
+def detect_all_patterns(timeline) -> dict:
+    return {
+        "P01_symbol_not_found":    detect_P01_symbol_not_found(timeline),
+        "P02_view_depth_flag":     detect_P02_view_depth_flag(timeline),
+        "P03_grep_wrong_flag":     detect_P03_grep_wrong_flag(timeline),
+        "P04_unsupported_file":    detect_P04_unsupported_file_flag(timeline),
+        "P05_multiple_symbols":    detect_P05_multiple_symbols(timeline),
+        "P06_cd_bad_path":         detect_P06_cd_bad_path(timeline),
+        "P07_backslash_path":      detect_P07_backslash_path(timeline),
+        "P08_windows_cmd_tools":   detect_P08_windows_cmd_tools(timeline),
+        "P09_scope_ambiguous":     detect_P09_scope_ambiguous(timeline),
+        "P10_dotenv_errors":       detect_P10_dotenv_errors(timeline),
+        "P11_view_file_missing":   detect_P11_view_file_missing(timeline),
+        "P12_pytest_broken":       detect_P12_pytest_broken(timeline),
+        "P13_wsl_path":            detect_P13_wsl_path(timeline),
+        "P14_pipe_masks_error":    detect_P14_pipe_masks_error(timeline),
+        "P15_read_directory":      detect_P15_read_directory(timeline),
+        "P16_read_empty_offset":   detect_P16_read_empty_offset(timeline),
+        "P17_read_blocked":        detect_P17_read_blocked(timeline),
+        "P18_grep_tool_blocked":   detect_P18_grep_tool_blocked(timeline),
+        "P19_lookup_regen":        detect_P19_lookup_regen(timeline),
+        "P20_list_empty":          detect_P20_list_empty(timeline),
+    }
+
+
+# Pattern metadata: description and severity
+_PATTERN_META = {
+    "P01_symbol_not_found":  ("HIGH", "smt definition/view/lookup -> symbol not found in graph (class method naming mismatch)"),
+    "P02_view_depth_flag":   ("MED",  "smt view --depth not supported; use smt context --depth instead"),
+    "P03_grep_wrong_flag":   ("HIGH", "smt grep with --compact/--head/--head_limit (now fixed with --top alias)"),
+    "P04_unsupported_file":  ("MED",  "--file flag used on smt impact/grep/lookup (only valid on definition/view/context)"),
+    "P05_multiple_symbols":  ("MED",  "smt definition/view ambiguous: Multiple symbols named X -> add --file"),
+    "P06_cd_bad_path":       ("HIGH", "cd to nonexistent path before smt -> smt runs in wrong dir or fails"),
+    "P07_backslash_path":    ("HIGH", "unquoted C:\\ path in bash -> backslashes stripped -> file not found"),
+    "P08_windows_cmd_tools": ("HIGH", "findstr/Get-Content/Select-String in bash -> command not found"),
+    "P09_scope_ambiguous":   ("HIGH", "smt scope <basename> matches multiple files -> use full relative path"),
+    "P10_dotenv_errors":     ("CRIT", "python-dotenv parse error -> every smt command fails in this project"),
+    "P11_view_file_missing": ("MED",  "smt view: symbol in graph but source file missing from benchmark checkout"),
+    "P12_pytest_broken":     ("LOW",  "pytest conftest ImportError -> can't run tests in benchmark env"),
+    "P13_wsl_path":          ("MED",  "/mnt/c/ path used on native Windows bash (not WSL)"),
+    "P14_pipe_masks_error":  ("MED",  "smt cmd | head: if smt fails, head exits 0 masking the error"),
+    "P15_read_directory":    ("MED",  "Read tool called on a directory path -> EISDIR"),
+    "P16_read_empty_offset": ("HIGH", "Read with offset='' (empty string) blocked same as full-file read"),
+    "P17_read_blocked":      ("HIGH", "Read without offset blocked by hook -> agent needs smt first"),
+    "P18_grep_tool_blocked": ("HIGH", "Grep tool blocked by hook -> use smt grep directly"),
+    "P19_lookup_regen":      ("MED",  "smt lookup triggered embedding regeneration (run smt build first)"),
+    "P20_list_empty":        ("LOW",  "smt list --module returning empty (path/module name mismatch)"),
+}
+
+
+# Legacy aliases for backward compat with existing callers
 def find_scope_ambiguous(timeline):
-    """Detect smt scope returning 'Multiple files match' (ambiguous basename like exceptions.py)."""
-    bad = []
-    for t in timeline:
-        if t["name"] != "Bash" or not t["is_error"]:
-            continue
-        cmd = t["input"].get("command", "").strip()
-        if cmd.startswith("smt scope") and "Multiple files match" in t["result"]:
-            bad.append(cmd[:80])
-    return bad
-
+    return detect_P09_scope_ambiguous(timeline)
 
 def find_dotenv_errors(timeline):
-    """Count smt command failures caused by python-dotenv parse errors in the project .env."""
-    return sum(
-        1 for t in timeline
-        if t["name"] == "Bash" and t["is_error"]
-        and "python-dotenv could not parse" in t["result"]
-    )
+    return len(detect_P10_dotenv_errors(timeline))
+
+def find_cd_errors(timeline):
+    return detect_P06_cd_bad_path(timeline)
+
+def find_path_errors(timeline):
+    return detect_P07_backslash_path(timeline)
+
+def find_scope_errors(timeline):
+    hits = []
+    for t in timeline:
+        if t["name"] != "Bash" or not t["is_error"]:
+            continue
+        cmd = t["input"].get("command", "").strip()
+        if cmd.startswith("smt scope"):
+            hits.append((cmd, t["result"][:80]))
+    return hits
+
+def find_list_errors(timeline):
+    return [(c, "") for c in detect_P20_list_empty(timeline)]
+
+def find_lookup_regenerations(timeline):
+    return detect_P19_lookup_regen(timeline)
+
+def find_grep_flag_errors(timeline):
+    return detect_P03_grep_wrong_flag(timeline)
+
+def find_flag_errors(timeline):
+    return []  # subsumed by P03/P04
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +545,7 @@ def analyze_one(path: str) -> dict:
     totals, errors = tool_call_summary(timeline)
     read_blocked, read_partial, read_ok = analyze_read_calls(timeline)
     grep_blocked, grep_ok = analyze_grep_calls(timeline)
+    patterns = detect_all_patterns(timeline)
 
     return dict(
         path=path,
@@ -410,13 +562,15 @@ def analyze_one(path: str) -> dict:
         smt_err=len(smt_err),
         fallback=len(fallback),
         smt_counts=smt_subcommand_counts(timeline),
+        pivot_turn=first_fallback_turn(timeline),
+        abandonment_turn=smt_abandonment_turn(timeline),
+        # Legacy single-field accessors (used by print_single)
         flag_errors=find_flag_errors(timeline),
         grep_flag_errors=find_grep_flag_errors(timeline),
         scope_errors=find_scope_errors(timeline),
         scope_ambiguous=find_scope_ambiguous(timeline),
         list_errors=find_list_errors(timeline),
         regen_count=find_lookup_regenerations(timeline),
-        pivot_turn=first_fallback_turn(timeline),
         cd_errors=find_cd_errors(timeline),
         path_errors=find_path_errors(timeline),
         dotenv_errors=find_dotenv_errors(timeline),
@@ -431,6 +585,8 @@ def analyze_one(path: str) -> dict:
         skill_calls=analyze_skill_calls(timeline),
         edit_calls=analyze_edit_calls(timeline),
         glob_calls=analyze_glob_calls(timeline),
+        # Full 20-pattern hit dict
+        patterns=patterns,
         timeline=timeline,
     )
 
@@ -539,79 +695,29 @@ def print_single(s: dict):
             status = "ok " if ok else "ERR"
             print(f"  [{status}] {pat}")
 
-    # --- SMT-specific failures ---
-    if s["cd_errors"]:
-        print(f"\nCD ERRORS  ({len(s['cd_errors'])} calls)  [cd before smt -> wrong cwd or path not found]")
-        for cmd in s["cd_errors"]:
-            print(f"  {cmd}")
+    # --- All 20 patterns ---
+    pats = s["patterns"]
+    has_any = any(
+        (len(v) if isinstance(v, list) else v) > 0
+        for v in pats.values()
+    )
+    if has_any:
+        print(f"\nFAILURE PATTERNS  (20-pattern suite)")
+        for key, hits in pats.items():
+            n = len(hits) if isinstance(hits, list) else hits
+            if not n:
+                continue
+            sev, desc = _PATTERN_META.get(key, ("?", key))
+            print(f"  [{sev}] {key}  x{n}")
+            print(f"         {desc}")
+            examples = hits if isinstance(hits, list) else []
+            for ex in examples[:2]:
+                print(f"         -> {str(ex)[:90]}")
 
-    if s["path_errors"]:
-        print(f"\nWINDOWS PATH ERRORS  ({len(s['path_errors'])} calls)  [C:\\ path in bash -> backslashes stripped]")
-        for cmd in s["path_errors"]:
-            print(f"  {cmd}")
+    aband = s.get("abandonment_turn")
+    if aband:
+        print(f"\nSMT ABANDONMENT at turn {aband}: agent stopped using smt and switched to grep/sed/Read loops")
 
-    if s["dotenv_errors"]:
-        print(f"\nDOTENV ERRORS  ({s['dotenv_errors']} calls)  [bad .env -> all smt commands fail]")
-
-    if s["grep_flag_errors"]:
-        print(f"\nSMT GREP FLAG ERRORS  ({len(s['grep_flag_errors'])} calls)  [--head/--head_limit; now fixed with --top alias]")
-        for cmd, is_err in s["grep_flag_errors"]:
-            status = "FAIL" if is_err else "ok"
-            print(f"  [{status}] {cmd}")
-
-    if s["flag_errors"]:
-        print(f"\nINVALID FLAGS  ({len(s['flag_errors'])} calls)  [--compact/--brief on unsupported cmd]")
-        for cmd in s["flag_errors"]:
-            print(f"  {cmd[:90]}")
-
-    if s["scope_ambiguous"]:
-        print(f"\nSMT SCOPE AMBIGUOUS  ({len(s['scope_ambiguous'])} calls)  [Multiple files match — use full relative path]")
-        for cmd in s["scope_ambiguous"]:
-            print(f"  {cmd}")
-
-    if s["scope_errors"]:
-        other = [x for x in s["scope_errors"] if x[0] not in s["scope_ambiguous"]]
-        if other:
-            print(f"\nSMT SCOPE OTHER ERRORS  ({len(other)} calls)")
-            for cmd, res in other:
-                print(f"  CMD: {cmd[:80]}")
-                print(f"  ERR: {res[:60]}")
-
-    if s["list_errors"]:
-        print(f"\nSMT LIST EMPTY  ({len(s['list_errors'])} calls)")
-        for cmd, _ in s["list_errors"]:
-            print(f"  CMD: {cmd[:80]}")
-
-    if s["regen_count"]:
-        print(f"\nEMBEDDING REGENERATIONS: {s['regen_count']}  (smt build should pre-build FAISS index)")
-
-    # --- Root causes ranked by impact ---
-    causes = []
-    if s["cd_errors"]:
-        causes.append(f"[HIGH] {len(s['cd_errors'])} cd-before-smt errors -> smt runs in wrong dir or fails immediately")
-    if s["dotenv_errors"]:
-        causes.append(f"[HIGH] {s['dotenv_errors']} dotenv parse errors -> every smt command fails until .env is fixed")
-    if s["read_blocked"]:
-        causes.append(f"[HIGH] {len(s['read_blocked'])} full-file Read blocks -> wasted turns on hook denial")
-    if s["grep_blocked"]:
-        causes.append(f"[MED]  {len(s['grep_blocked'])} Grep tool blocks -> should use smt grep directly")
-    if s["grep_flag_errors"]:
-        causes.append(f"[MED]  {len(s['grep_flag_errors'])} smt grep --head/--head_limit (now fixed)")
-    if s["scope_ambiguous"]:
-        causes.append(f"[MED]  {len(s['scope_ambiguous'])} smt scope ambiguous filename -> use requests/exceptions.py")
-    if s["path_errors"]:
-        causes.append(f"[MED]  {len(s['path_errors'])} Windows backslash paths in bash -> path mangled")
-    if s["flag_errors"]:
-        causes.append(f"[LOW]  {len(s['flag_errors'])} --compact/--brief on unsupported commands")
-    if s["list_errors"]:
-        causes.append(f"[LOW]  {len(s['list_errors'])} smt list --module returning empty")
-    if s["regen_count"]:
-        causes.append(f"[LOW]  {s['regen_count']} embedding regeneration(s)")
-    if not causes:
-        causes.append("[NONE] No systematic failures detected")
-    print(f"\nROOT CAUSES")
-    for c in causes:
-        print(f"  {c}")
     print()
 
 
@@ -680,26 +786,25 @@ def print_comparison(instance: str, sessions: list, repo: str = "."):
         verdict = "IMPROVED" if delta_cost < -0.005 else "REGRESSED" if delta_cost > 0.005 else "SIMILAR"
         print(f"\nVERDICT: {verdict}  (dcost={delta_cost:+.4f}, dturns={delta_turns:+d})")
 
-        # New errors in s2 not seen in s1
-        new_grep_flag = len(s2["grep_flag_errors"]) - len(s1["grep_flag_errors"])
-        new_smt_err = s2["smt_err"] - s1["smt_err"]
-        new_fallback = s2["fallback"] - s1["fallback"]
-        new_read_blk = len(s2["read_blocked"]) - len(s1["read_blocked"])
-        new_grep_blk = len(s2["grep_blocked"]) - len(s1["grep_blocked"])
+        # New pattern hits in s2 vs s1
         if verdict == "REGRESSED":
-            print(f"\nREGRESSION CAUSES:")
-            if new_grep_flag > 0:
-                print(f"  [HIGH] +{new_grep_flag} smt grep --head/--head_limit errors (now fixed: added --head_limit alias)")
-            if new_read_blk > 0:
-                print(f"  [HIGH] +{new_read_blk} full-file Read blocks -> wasted turns")
-            if new_grep_blk > 0:
-                print(f"  [HIGH] +{new_grep_blk} Grep tool blocks -> agent should use smt grep directly")
-            if new_smt_err > 0:
-                print(f"  [MED]  +{new_smt_err} additional smt command errors")
-            if new_fallback > 0:
-                print(f"  [MED]  +{new_fallback} additional fallback bash calls")
-            if len(set(tasks)) > 1:
-                print(f"  [INFO] task prompt changed between runs -- broader task = more turns expected")
+            print(f"\nREGRESSION CAUSES (pattern deltas):")
+            p1, p2 = s1["patterns"], s2["patterns"]
+            any_cause = False
+            for key in sorted(p1.keys()):
+                v1 = len(p1[key]) if isinstance(p1[key], list) else p1[key]
+                v2 = len(p2[key]) if isinstance(p2[key], list) else p2[key]
+                delta = v2 - v1
+                if delta > 0:
+                    sev, desc = _PATTERN_META.get(key, ("?", key))
+                    print(f"  [{sev}] {key}: {v1} -> {v2} (+{delta})")
+                    print(f"         {desc}")
+                    any_cause = True
+            if not any_cause:
+                if len(set(tasks)) > 1:
+                    print(f"  [INFO] No pattern increase — task prompt was broader (more exploration expected)")
+                else:
+                    print(f"  [INFO] No pattern increase detected — likely LLM variance")
     print()
 
     # Individual session details
@@ -713,9 +818,17 @@ def print_comparison(instance: str, sessions: list, repo: str = "."):
 
 # Metric name -> (key_in_session, how_to_count)
 # Each metric extracts a scalar from an analyzed session dict.
+def _pat_count(s, key):
+    v = s["patterns"].get(key, [])
+    return len(v) if isinstance(v, list) else v
+
 _METRICS = [
+    # Top-level
+    ("cost_usd",      lambda s: s["cost"] or 0),
+    ("turns",         lambda s: s["turns"] or 0),
     ("total_calls",   lambda s: sum(s["tool_totals"].values())),
     ("total_errors",  lambda s: sum(s["tool_errors"].values())),
+    # Tool breakdown
     ("Bash",          lambda s: s["tool_totals"].get("Bash", 0)),
     ("Read",          lambda s: s["tool_totals"].get("Read", 0)),
     ("Skill",         lambda s: s["tool_totals"].get("Skill", 0)),
@@ -724,20 +837,8 @@ _METRICS = [
     ("smt_ok",        lambda s: s["smt_ok"]),
     ("smt_err",       lambda s: s["smt_err"]),
     ("bash_fallback", lambda s: s["fallback"]),
-    ("Read_blocked",  lambda s: len(s["read_blocked"])),
-    ("Read_partial",  lambda s: len(s["read_partial"])),
-    ("Grep_blocked",  lambda s: len(s["grep_blocked"])),
-    ("cd_errors",     lambda s: len(s["cd_errors"])),
-    ("path_errors",   lambda s: len(s["path_errors"])),
-    ("dotenv_errors", lambda s: s["dotenv_errors"]),
-    ("grep_flags",    lambda s: len(s["grep_flag_errors"])),
-    ("scope_ambig",   lambda s: len(s["scope_ambiguous"])),
-    ("flag_errors",   lambda s: len(s["flag_errors"])),
-    ("scope_errors",  lambda s: len(s["scope_errors"])),
-    ("list_errors",   lambda s: len(s["list_errors"])),
-    ("cost_usd",      lambda s: s["cost"] or 0),
-    ("turns",         lambda s: s["turns"] or 0),
-]
+    # 20 patterns
+] + [(k, lambda s, k=k: _pat_count(s, k)) for k in sorted(_PATTERN_META.keys())]
 
 
 def _batch_label(s: dict) -> str:
@@ -808,43 +909,77 @@ def print_global_report(all_sessions: list):
 
         print(f"  {name:<18} {v1:>16} {a1s:>6}  {v2:>16} {a2s:>6}  {trend:>8}")
 
-    # Per-session tool call breakdown
-    print(f"\nPER-SESSION TOOL CALLS")
-    print(f"  {'session':<38} {'total':>5} {'Bash':>4} {'Read':>4} {'Skill':>5} {'Edit':>4} {'Grep':>4} | {'err':>4} {'rd_blk':>6} {'gr_blk':>6} {'cd_err':>6} {'dotenv':>6}")
-    print("  " + "-" * 100)
+    # Per-session pattern hit matrix
+    pat_keys = sorted(_PATTERN_META.keys())
+    hdr = f"  {'session':<30}"
+    for k in pat_keys:
+        hdr += f" {k[1:3]:>3}"
+    hdr += f" | {'err':>4} {'cost':>7} {'turns':>5}"
+    print(f"\nPER-SESSION PATTERN MATRIX  (column = P01..P20, value = hit count)")
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
     for s in all_sessions:
-        T = s["tool_totals"]
-        E = s["tool_errors"]
         ts = parse_ts(s["stem"])
         inst = s["stem"].split("__smt__")[0].replace("psf__requests-", "")
         label = f"{inst}  {ts[11:]}"
-        total = sum(T.values())
-        total_err = sum(E.values())
-        print(
-            f"  {label:<38} {total:>5} {T.get('Bash',0):>4} {T.get('Read',0):>4} "
-            f"{T.get('Skill',0):>5} {T.get('Edit',0):>4} {T.get('Grep',0):>4} | "
-            f"{total_err:>4} {len(s['read_blocked']):>6} {len(s['grep_blocked']):>6} "
-            f"{len(s['cd_errors']):>6} {s['dotenv_errors']:>6}"
-        )
+        row = f"  {label:<30}"
+        total_hits = 0
+        for k in pat_keys:
+            n = _pat_count(s, k)
+            total_hits += n
+            row += f" {n if n else '.':>3}"
+        total_err = sum(s["tool_errors"].values())
+        cost_s = f"${s['cost']:.4f}" if s["cost"] else "?"
+        row += f" | {total_err:>4} {cost_s:>7} {str(s['turns'] or '?'):>5}"
+        print(row)
+
+    # Git commit timeline — what changed between batch 1 and batch 2
+    t_b1_last = max((parse_ts(s["stem"]) for s in b1), default="")
+    t_b2_first = min((parse_ts(s["stem"]) for s in b2), default="")
+    smt_repo = str(Path(__file__).parent.parent)
+    if t_b1_last and t_b2_first:
+        commits = git_log_between(t_b1_last, t_b2_first, smt_repo)
+        print(f"\nGIT COMMITS between last {b1_label} run ({t_b1_last}) and first {b2_label} run ({t_b2_first}):")
+        if commits:
+            for c in commits:
+                print(f"  {c}")
+            # Annotate which patterns each commit likely affects
+            for c in commits:
+                msg = c.lower()
+                affects = []
+                if "scope" in msg:
+                    affects.append("P09_scope_ambiguous")
+                if "skill" in msg or "shell" in msg or "cd" in msg:
+                    affects.append("P06_cd_bad_path")
+                if "grep" in msg:
+                    affects.append("P03_grep_wrong_flag")
+                if "dotenv" in msg or ".env" in msg:
+                    affects.append("P10_dotenv_errors")
+                if affects:
+                    print(f"    -> likely affects: {', '.join(affects)}")
+        else:
+            print("  (none)")
 
     # Summary verdict
-    print(f"\nSUMMARY")
+    print(f"\nSUMMARY  ({b1_label} -> {b2_label})")
     if regressions:
         regressions.sort(key=lambda x: x[3], reverse=True)
-        print(f"  WORSE  ({len(regressions)} metrics increased from {b1_label} to {b2_label}):")
+        print(f"  WORSE  ({len(regressions)} metrics):")
         for name, v1, v2, delta in regressions:
             v1s = f"${v1:.3f}" if name == "cost_usd" else str(int(v1))
             v2s = f"${v2:.3f}" if name == "cost_usd" else str(int(v2))
+            sev = _PATTERN_META.get(name, ("?", ""))[0] if name in _PATTERN_META else ""
+            sev_tag = f"[{sev}] " if sev else ""
             ds  = f"+${delta:.3f}" if name == "cost_usd" else f"+{int(delta)}"
-            print(f"    {name:<18} {v1s:>8} -> {v2s:<8}  ({ds})")
+            print(f"    {sev_tag}{name:<22} {v1s:>6} -> {v2s:<6}  ({ds})")
     if improvements:
         improvements.sort(key=lambda x: x[3], reverse=True)
-        print(f"  BETTER ({len(improvements)} metrics decreased from {b1_label} to {b2_label}):")
+        print(f"  BETTER ({len(improvements)} metrics):")
         for name, v1, v2, delta in improvements:
             v1s = f"${v1:.3f}" if name == "cost_usd" else str(int(v1))
             v2s = f"${v2:.3f}" if name == "cost_usd" else str(int(v2))
             ds  = f"-${delta:.3f}" if name == "cost_usd" else f"-{int(delta)}"
-            print(f"    {name:<18} {v1s:>8} -> {v2s:<8}  ({ds})")
+            print(f"    {name:<26} {v1s:>6} -> {v2s:<6}  ({ds})")
     print()
 
 
