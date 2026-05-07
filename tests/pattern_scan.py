@@ -72,7 +72,8 @@ for f in files:
             if err and re.search(r"smt view.*--depth", cmd):
                 patterns["P02: smt_view_with_depth_flag"].append((sess, cmd[:80], ""))
 
-            if err and re.match(r"smt grep", cmd) and re.search(r"--compact|--head(?:_limit)?", cmd):
+            grep_part = re.split(r"\s+&&\s+|\s+\|\s+", cmd)[0]
+            if err and re.match(r"smt grep", cmd) and re.search(r"--compact|--head(?:_limit)?", grep_part):
                 patterns["P03: smt_grep_wrong_flag"].append((sess, cmd[:80], ""))
 
             if err and re.search(r"smt (impact|grep)\b.*--file", cmd):

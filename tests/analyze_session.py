@@ -197,7 +197,13 @@ def detect_P03_grep_wrong_flag(timeline):
     hits = []
     for t in _bash_all(timeline):
         cmd = t["input"].get("command", "").strip()
-        if re.match(r"smt\s+grep\b", cmd) and re.search(r"--compact|--head(?:_limit)?", cmd):
+        if not re.match(r"smt\s+grep\b", cmd):
+            continue
+        # Only inspect the grep portion — stop at ' && ' or ' | ' so chained commands like
+        # "smt grep X && smt context X --compact" don't produce false positives.
+        # Use spaced separators to avoid splitting on \| inside quoted grep patterns.
+        grep_part = re.split(r"\s+&&\s+|\s+\|\s+", cmd)[0]
+        if re.search(r"--compact|--head(?:_limit)?", grep_part):
             hits.append((cmd[:80], t["is_error"]))
     return hits
 
@@ -851,19 +857,20 @@ _METRICS = [
 
 
 def _batch_label(s: dict) -> str:
-    """Return 'T15' or 'T17' (or the hour) based on the session timestamp."""
+    """Return date+hour label like '05-07T15' for grouping sessions into batches."""
     ts = parse_ts(s["stem"])
-    return ts[11:13] if ts else "??"
+    return ts[5:13] if ts else "??"   # "MM-DDTHH" — unique per hour, sorts chronologically
 
 
 def print_global_report(all_sessions: list):
     """Print a cross-batch comparison table for every tool-call metric."""
-    # Group into batches by hour (T15 vs T17 vs T23 …)
+    # Group into batches by date+hour (chronological, cross-midnight safe)
     batch_map: dict = defaultdict(list)
     for s in all_sessions:
         batch_map[_batch_label(s)].append(s)
 
-    batches = sorted(batch_map.keys())
+    # Sort batches by the earliest session timestamp they contain (chronological order)
+    batches = sorted(batch_map.keys(), key=lambda lbl: min(parse_ts(s["stem"]) for s in batch_map[lbl]))
     if len(batches) < 2:
         return  # nothing to compare
 

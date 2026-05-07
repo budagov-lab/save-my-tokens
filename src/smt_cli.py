@@ -212,6 +212,8 @@ graph analysis:
                         help=argparse.SUPPRESS)  # silently ignored; use smt context --depth instead
     p_view.add_argument('--context', type=int, default=0, dest='context_lines',
                         help='Extra lines before/after the symbol body (default: 0)')
+    p_view.add_argument('--lines', default=None, dest='_ignored_lines',
+                        help=argparse.SUPPRESS)  # silently ignored; view takes a symbol, not a file+range
     p_view.add_argument('--compact', action='store_true', help=argparse.SUPPRESS)
     p_view.add_argument('--brief', action='store_true', help=argparse.SUPPRESS)
 
@@ -238,6 +240,10 @@ graph analysis:
     p_grep.add_argument('--type', dest='type_filter', default=None,
                         help='Filter by node type: Function, Class, etc.')
     p_grep.add_argument('--top', '--head_limit', '--head', dest='top', type=int, default=20)
+    p_grep.add_argument('--output_mode', '--output-mode', default=None, dest='_ignored_output_mode',
+                        help=argparse.SUPPRESS)  # smt grep always outputs content; no mode switch needed
+    p_grep.add_argument('-C', '--context-lines', type=int, default=0, dest='_ignored_context',
+                        help=argparse.SUPPRESS)  # context lines not supported; use smt view <symbol> for context
     p_grep.add_argument('--module', default=None,
                         help='Filter by file path fragment (e.g. --module adapters)')
 

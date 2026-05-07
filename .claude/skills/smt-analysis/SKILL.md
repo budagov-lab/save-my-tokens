@@ -85,6 +85,8 @@ If `smt grep X` returns nothing: the symbol may not exist in this checkout. Use 
 - `cd` anywhere — the working directory is already the project root  
 - `findstr`, `Get-Content`, `Select-String` — this is bash; use `smt grep`  
 - `Read <file>` without offset — always run `smt scope <file>` or `smt view <symbol>` first, then `Read` with offset+limit  
+- `smt view <file.py>` or `smt view <file.py> --lines N-M` — `smt view` takes a **symbol name**, not a file path; use `smt scope <file>` to list symbols or `Read` with offset+limit  
+- `smt grep ... --output_mode content` or `smt grep ... -C N` — these are Grep tool flags; `smt grep` already outputs content lines and has no context-window option  
 - Re-running the same query to "verify" — trust the first result  
 - Using `smt view X --depth N` — `--depth` is not a view flag; use `smt context X --depth N`  
 
