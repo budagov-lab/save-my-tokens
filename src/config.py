@@ -1,9 +1,16 @@
 """Configuration for smt-graph application."""
 
+import logging
 from pathlib import Path
 
 from pydantic import ConfigDict
 from pydantic_settings import BaseSettings
+
+# python-dotenv emits a WARNING when the project's .env has unparseable lines
+# (e.g. benchmark repos with a malformed .env).  Silence it so it never leaks
+# into smt's stdout/stderr and confuses agents reading the output.
+logging.getLogger("dotenv.main").setLevel(logging.ERROR)
+logging.getLogger("dotenv").setLevel(logging.ERROR)
 
 
 class Settings(BaseSettings):

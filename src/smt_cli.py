@@ -208,6 +208,8 @@ graph analysis:
     p_view = sub.add_parser('view', help='Show symbol source lines (graph lookup + targeted file read)')
     p_view.add_argument('symbol')
     p_view.add_argument('--file', default=None)
+    p_view.add_argument('--depth', type=int, default=None, dest='_ignored_depth',
+                        help=argparse.SUPPRESS)  # silently ignored; use smt context --depth instead
     p_view.add_argument('--context', type=int, default=0, dest='context_lines',
                         help='Extra lines before/after the symbol body (default: 0)')
     p_view.add_argument('--compact', action='store_true', help=argparse.SUPPRESS)

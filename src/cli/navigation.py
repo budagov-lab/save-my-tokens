@@ -210,13 +210,14 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
                 file_rows = filtered
 
         if len(file_rows) > 1:
-            print(f"Multiple files match {file_filter!r} — be more specific:\n")
+            print(f"Multiple files match {file_filter!r} — use the full relative path:\n")
             for r in file_rows[:10]:
                 try:
-                    print(f"  {Path(r['file']).relative_to(project_path)}")
+                    rel = str(Path(r['file']).relative_to(project_path))
                 except ValueError:
-                    print(f"  {r['file']}")
-            print(f"\n  Use: smt scope {file_filter} --dir <path-fragment>")
+                    rel = r['file']
+                # Always print with forward slashes so the suggestion is copy-pasteable
+                print(f"  smt scope {rel.replace(_os.sep, '/')}")
             return 1
 
         file_abs = file_rows[0]['file']

@@ -221,6 +221,18 @@ def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str,
         if fb:
             return fb
 
+        # Stage 1b: parent attribute may not be stored — try exact short-name match.
+        # Covers cases like Session.resolve_redirects where the graph stores the node
+        # as name="resolve_redirects" with no parent field set.
+        fb = session.run(
+            f"MATCH (n {{name: $name}}) WHERE 1=1 {pid_clause} "
+            "RETURN n, CASE WHEN n:Function THEN 0 WHEN n:Class THEN 1 ELSE 2 END as priority "
+            "ORDER BY priority LIMIT 1",
+            name=name_part, pid=project_id,
+        ).single()
+        if fb:
+            return fb
+
     # Stage 2: partial name match
     term = symbol.rsplit('.', 1)[-1]
     suggestions = session.run(
@@ -240,9 +252,16 @@ def _fallback_definition(session, symbol: str, pid_clause: str, project_id: str,
             except (ValueError, TypeError):
                 display = s['file'] or '?'
             print(f"    {qname}  [{s['type']}]  ({display})")
-        print(f"\n  Or try: smt search \"{term}\"")
+        print(f"\n  Or try: smt grep \"{term}\"")
     else:
-        print(f"\n  Try: smt lookup \"{symbol}\"")
+        # Symbol not indexed — may not exist in this checkout or wasn't parsed.
+        # Point to smt grep (searches names + docstrings) rather than smt lookup
+        # (which requires embeddings and also fails for unknown symbols).
+        print(f"  Try: smt grep \"{term}\"")
+        if '.' in symbol:
+            # Suggest scoping the likely parent file
+            parent = symbol.rsplit('.', 1)[0]
+            print(f"       smt scope <file.py>   (find which methods {parent!r} actually has)")
     return None
 
 
