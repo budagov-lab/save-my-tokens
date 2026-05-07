@@ -21,7 +21,8 @@ argument-hint: [symbol-or-question]
 
 ## Orient first
 
-Unknown symbol name? Run `smt scope <file.py>` — lists every symbol in the file. Batch independent lookups with `&&`.
+Unknown symbol name? Run `smt scope <file.py>` — lists every symbol in the file. Batch independent lookups with `&&`.  
+If `smt scope` returns "No symbols found", immediately fall back to `smt list --module <stem>` (same graph, more tolerant filter). Do not retry `smt scope` with variations.
 
 ## Query
 

@@ -184,6 +184,15 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
                     file_rows = _run_filter(session, normalized + ext)
                     if file_rows:
                         break
+            if not file_rows and Path(normalized).suffix:
+                # Extension-based CONTAINS can miss on separator/encoding variations.
+                # Fall back to stem-only search and post-filter by extension.
+                stem = Path(normalized).stem
+                ext = Path(normalized).suffix
+                stem_rows = _run_filter(session, stem)
+                file_rows = [r for r in stem_rows if r['file'].endswith(ext)]
+                if not file_rows:
+                    file_rows = stem_rows  # accept any stem match rather than nothing
 
         if not file_rows:
             print(f"No symbols found for file filter: {file_filter!r}")
@@ -191,7 +200,7 @@ def cmd_scope(file_filter: str, dir_filter: Optional[str] = None) -> int:
                 print(f"  Tip: include the file extension (e.g. '{file_filter}.py')")
             else:
                 stem = Path(normalized).stem
-                print(f"  Tip: file not indexed — try: smt grep --module {stem}")
+                print(f"  Tip: file not indexed — try: smt list --module {stem}")
             return 1
 
         if len(file_rows) > 1 and dir_filter:
