@@ -23,35 +23,33 @@ argument-hint: [symbol-or-question]
 | 0 nodes | Stop — tell user: `smt build` |
 | unreachable | Stop — tell user: `smt start` |
 
-## Turn 1 — run this immediately, before reasoning
+## ⚡ Run smt directly — no cd required
 
-Extract the 1-3 key symbol names from the task. Run ONE compound command covering all of them:
+`smt grep X`, `smt view X`, `smt context X` work from the current directory.  
+**Do NOT `cd` anywhere before running smt — especially not `cd .claude/skills/smt-analysis`.**  
+The working directory is already the project root.
 
-```bash
-smt grep <term1> && smt grep <term2>
-```
+## Turn 1 — pick one shortcut and run it
 
-Then in the SAME turn (chain with `&&`) or the very next turn:
-
-```bash
-smt context <symbol> --depth 2 --compact --compress && smt view <symbol>
-```
-
-`smt context` → call graph (callers + callees).  `smt view` → actual source lines.  
-**After these two commands you have everything needed for most tasks. Write your report.**
-
-### Task-type shortcuts
-
-| Task says | Run first |
+| Task says | Run |
 |---|---|
 | "where is X" / "how does X work" | `smt grep X && smt view X` |
-| "what do I need to work on X" | `smt context X --depth 2 --compact && smt view X` |
+| "what do I need to work on X" | `smt context X --depth 2 --compact --compress && smt view X` |
 | "what breaks if I change X" | `smt impact X --depth 3` |
 | "who calls X" | `smt context X --callers` |
-| file name mentioned | `smt scope requests/file.py` (use full relative path) |
-| broad concept, no symbol | `smt grep <concept>` then pick symbols from results |
+| file name mentioned | `smt scope requests/file.py` (full relative path, not basename) |
+| broad concept, no symbol | `smt grep <concept>` then pick symbols |
 
 Batch independent queries with `&&` — never waste a turn on a single lookup.
+
+## Stop when you have these four things
+
+1. File path + line number for the symbol  
+2. What it calls — from `smt context`  
+3. Who calls it — from `smt context --callers` or `smt impact`  
+4. The actual source — from `smt view`  
+
+**That is enough. Write the report immediately. Do not read more files.**
 
 ## Symbol not found
 
@@ -82,22 +80,13 @@ If `smt grep X` returns nothing: the symbol may not exist in this checkout. Use 
 
 ## Hard stops — do NOT do these
 
-- `cd` anywhere — the working directory is already the project root  
-- `findstr`, `Get-Content`, `Select-String` — this is bash; use `smt grep`  
-- `Read <file>` without offset — always run `smt scope <file>` or `smt view <symbol>` first, then `Read` with offset+limit  
-- `smt view <file.py>` or `smt view <file.py> --lines N-M` — `smt view` takes a **symbol name**, not a file path; use `smt scope <file>` to list symbols or `Read` with offset+limit  
-- `smt grep ... --output_mode content` or `smt grep ... -C N` — these are Grep tool flags; `smt grep` already outputs content lines and has no context-window option  
-- Re-running the same query to "verify" — trust the first result  
-- Using `smt view X --depth N` — `--depth` is not a view flag; use `smt context X --depth N`  
-
-## Sufficient — stop exploring when you have
-
-1. File path + line number for the symbol  
-2. What it calls (from `smt context`)  
-3. Who calls it (from `smt context` or `smt impact`)  
-4. The actual code (from `smt view`)  
-
-That is enough. Write the report. Do not keep exploring.
+- `cd` anywhere, especially `cd .claude/skills/smt-analysis` — run `smt` from the current directory  
+- `findstr`, `Get-Content`, `Select-String` — bash only; use `smt grep`  
+- `Read <file>` without offset — run `smt scope <file>` or `smt view <symbol>` first, then `Read` with offset+limit  
+- `smt view <file.py>` or `smt view <file.py> --lines N-M` — `smt view` takes a **symbol name**, not a file path; use `smt scope <file>` to list symbols  
+- `smt grep ... --output_mode content` or `smt grep ... -C N` — Grep tool flags; `smt grep` outputs content by default  
+- Re-running the same query to verify — trust the first result  
+- `smt view X --depth N` — `--depth` is not a view flag; use `smt context X --depth N`
 
 ## Report format
 
