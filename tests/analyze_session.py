@@ -106,7 +106,7 @@ def extract_timeline(events):
 
 
 # ---------------------------------------------------------------------------
-# Analysis helpers
+# Analysis helpers — Bash / SMT
 # ---------------------------------------------------------------------------
 
 def classify_bash(cmd: str):
@@ -221,6 +221,91 @@ def smt_subcommand_counts(timeline):
 
 
 # ---------------------------------------------------------------------------
+# Analysis helpers — non-Bash tools
+# ---------------------------------------------------------------------------
+
+def analyze_read_calls(timeline):
+    """Categorize Read calls: full-file blocks, partial reads (offset/limit), successful."""
+    blocked, partial, ok = [], [], []
+    for t in timeline:
+        if t["name"] != "Read":
+            continue
+        inp = t["input"]
+        fp = inp.get("file_path", "")
+        fname = Path(fp).name if fp else "?"
+        has_offset = "offset" in inp or "limit" in inp
+        if t["is_error"] or "Full-file read blocked" in t["result"]:
+            blocked.append(fname)
+        elif has_offset:
+            partial.append(fname)
+        else:
+            ok.append(fname)
+    return blocked, partial, ok
+
+
+def analyze_grep_calls(timeline):
+    """Classify Grep tool calls: hook-blocked vs successful."""
+    blocked, ok = [], []
+    for t in timeline:
+        if t["name"] != "Grep":
+            continue
+        pat = t["input"].get("pattern", "")
+        path = t["input"].get("path", "")
+        label = f'pattern="{pat[:50]}"' + (f' path={path}' if path else '')
+        if t["is_error"] or "Grep blocked" in t["result"]:
+            blocked.append(label)
+        else:
+            ok.append(label)
+    return blocked, ok
+
+
+def analyze_skill_calls(timeline):
+    """Return list of (skill_name, args, success) for Skill tool calls."""
+    calls = []
+    for t in timeline:
+        if t["name"] != "Skill":
+            continue
+        skill = t["input"].get("skill", "?")
+        args = t["input"].get("args", "")
+        calls.append((skill, str(args)[:80], not t["is_error"]))
+    return calls
+
+
+def analyze_edit_calls(timeline):
+    """Return list of files touched by Edit/Write tool calls."""
+    edits = []
+    for t in timeline:
+        if t["name"] not in ("Edit", "Write"):
+            continue
+        fp = t["input"].get("file_path", "?")
+        fname = Path(fp).name if fp != "?" else "?"
+        edits.append((t["name"], fname, not t["is_error"]))
+    return edits
+
+
+def analyze_glob_calls(timeline):
+    """Return list of (pattern, success) for Glob calls."""
+    calls = []
+    for t in timeline:
+        if t["name"] != "Glob":
+            continue
+        pat = t["input"].get("pattern", "?")
+        calls.append((pat, not t["is_error"]))
+    return calls
+
+
+def tool_call_summary(timeline):
+    """Return Counter of {tool_name: total} and {tool_name: errors}."""
+    totals = Counter()
+    errors = Counter()
+    for t in timeline:
+        totals[t["name"]] += 1
+        if t["is_error"]:
+            errors[t["name"]] += 1
+    return totals, errors
+
+
+# ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
 
@@ -259,6 +344,9 @@ def analyze_one(path: str) -> dict:
 
     bash, smt_ok, smt_err, fallback = compute_smt_vs_fallback(timeline)
     result_event = next((e for e in events if e.get("type") == "result"), None)
+    totals, errors = tool_call_summary(timeline)
+    read_blocked, read_partial, read_ok = analyze_read_calls(timeline)
+    grep_blocked, grep_ok = analyze_grep_calls(timeline)
 
     return dict(
         path=path,
@@ -270,6 +358,7 @@ def analyze_one(path: str) -> dict:
         cost=result_event.get("total_cost_usd") if result_event else None,
         cache_read=(result_event or {}).get("usage", {}).get("cache_read_input_tokens", 0),
         output_tokens=(result_event or {}).get("usage", {}).get("output_tokens", 0),
+        # Bash / SMT
         smt_ok=len(smt_ok),
         smt_err=len(smt_err),
         fallback=len(fallback),
@@ -280,6 +369,17 @@ def analyze_one(path: str) -> dict:
         list_errors=find_list_errors(timeline),
         regen_count=find_lookup_regenerations(timeline),
         pivot_turn=first_fallback_turn(timeline),
+        # All tools
+        tool_totals=totals,
+        tool_errors=errors,
+        read_blocked=read_blocked,
+        read_partial=read_partial,
+        read_ok=read_ok,
+        grep_blocked=grep_blocked,
+        grep_ok=grep_ok,
+        skill_calls=analyze_skill_calls(timeline),
+        edit_calls=analyze_edit_calls(timeline),
+        glob_calls=analyze_glob_calls(timeline),
         timeline=timeline,
     )
 
@@ -324,16 +424,71 @@ def print_single(s: dict):
     print(f"TASK:    {s['task']}")
     print(f"{'='*70}")
 
+    # --- All-tool summary ---
+    totals = s["tool_totals"]
+    errors = s["tool_errors"]
+    total_calls = sum(totals.values())
+    print(f"\nALL TOOL CALLS  (total: {total_calls})")
+    for tool, count in totals.most_common():
+        err = errors.get(tool, 0)
+        err_str = f"  {err} err" if err else ""
+        print(f"  {tool:<12} {count:3d}{err_str}")
+
+    # --- Bash / SMT breakdown ---
     bash_total = s["smt_ok"] + s["smt_err"] + s["fallback"]
-    print(f"\nCALL DISTRIBUTION  (total bash: {bash_total})")
+    print(f"\nBASH BREAKDOWN  (total: {bash_total})")
     print(f"  smt success   : {s['smt_ok']:3d}")
     print(f"  smt errors    : {s['smt_err']:3d}")
-    print(f"  fallback      : {s['fallback']:3d}")
+    print(f"  fallback bash : {s['fallback']:3d}")
     if s["pivot_turn"]:
         print(f"  first fallback at turn {s['pivot_turn']}")
     if s["smt_counts"]:
         print(f"  smt breakdown : {dict(s['smt_counts'])}")
 
+    # --- Read tool ---
+    read_total = len(s["read_blocked"]) + len(s["read_partial"]) + len(s["read_ok"])
+    if read_total:
+        print(f"\nREAD CALLS  (total: {read_total})")
+        print(f"  ok (no offset)  : {len(s['read_ok']):3d}  {s['read_ok'][:5]}")
+        print(f"  partial (offset): {len(s['read_partial']):3d}  {s['read_partial'][:5]}")
+        if s["read_blocked"]:
+            print(f"  BLOCKED         : {len(s['read_blocked']):3d}  [full-file read without SMT first]")
+            for f in s["read_blocked"][:5]:
+                print(f"    {f}")
+
+    # --- Grep tool ---
+    grep_total = len(s["grep_blocked"]) + len(s["grep_ok"])
+    if grep_total:
+        print(f"\nGREP TOOL CALLS  (total: {grep_total})")
+        if s["grep_ok"]:
+            print(f"  ok      : {len(s['grep_ok']):3d}")
+        if s["grep_blocked"]:
+            print(f"  BLOCKED : {len(s['grep_blocked']):3d}  [hook redirects to smt grep]")
+            for label in s["grep_blocked"][:5]:
+                print(f"    {label}")
+
+    # --- Skill calls ---
+    if s["skill_calls"]:
+        print(f"\nSKILL CALLS  (total: {len(s['skill_calls'])})")
+        for skill, args, ok in s["skill_calls"]:
+            status = "ok " if ok else "ERR"
+            print(f"  [{status}] {skill}  args={args[:70]}")
+
+    # --- Edit / Write ---
+    if s["edit_calls"]:
+        print(f"\nEDIT/WRITE CALLS  (total: {len(s['edit_calls'])})")
+        for tool, fname, ok in s["edit_calls"]:
+            status = "ok " if ok else "ERR"
+            print(f"  [{status}] {tool:<5}  {fname}")
+
+    # --- Glob ---
+    if s["glob_calls"]:
+        print(f"\nGLOB CALLS  (total: {len(s['glob_calls'])})")
+        for pat, ok in s["glob_calls"]:
+            status = "ok " if ok else "ERR"
+            print(f"  [{status}] {pat}")
+
+    # --- SMT-specific failures ---
     if s["grep_flag_errors"]:
         print(f"\nSMT GREP FLAG ERRORS  ({len(s['grep_flag_errors'])} calls)  [--head/--head_limit not supported; use --top]")
         for cmd, is_err in s["grep_flag_errors"]:
@@ -359,13 +514,18 @@ def print_single(s: dict):
     if s["regen_count"]:
         print(f"\nEMBEDDING REGENERATIONS: {s['regen_count']}  (smt build should pre-build FAISS index)")
 
+    # --- Root causes ---
     causes = []
+    if s["read_blocked"]:
+        causes.append(f"[HIGH] {len(s['read_blocked'])} full-file Read blocks -> wasted turns waiting for hook denial")
+    if s["grep_blocked"]:
+        causes.append(f"[HIGH] {len(s['grep_blocked'])} Grep tool blocks -> hook forces smt grep; agent should use smt grep directly")
     if s["grep_flag_errors"]:
-        causes.append(f"[HIGH] {len(s['grep_flag_errors'])} smt grep --head/--head_limit calls -> Exit code 2 -> agent falls back")
+        causes.append(f"[HIGH] {len(s['grep_flag_errors'])} smt grep --head/--head_limit -> Exit code 2 -> agent falls back")
     if s["flag_errors"]:
-        causes.append(f"[HIGH] {len(s['flag_errors'])} --compact/--brief on unsupported commands")
+        causes.append(f"[MED]  {len(s['flag_errors'])} --compact/--brief on unsupported commands")
     if s["scope_errors"]:
-        causes.append(f"[MED]  {len(s['scope_errors'])} smt scope errors -> early fallback to grep/sed")
+        causes.append(f"[MED]  {len(s['scope_errors'])} smt scope errors -> fallback to grep/sed")
     if s["list_errors"]:
         causes.append(f"[MED]  {len(s['list_errors'])} smt list --module returning empty")
     if s["regen_count"]:
@@ -385,13 +545,15 @@ def print_comparison(instance: str, sessions: list, repo: str = "."):
     print(f"{'#'*70}")
 
     # Summary table
-    print(f"\n{'Session':<45} {'turns':>5} {'cost':>8} {'smt_ok':>6} {'smt_err':>7} {'fallbk':>6}")
-    print("-" * 80)
+    print(f"\n{'Session':<45} {'turns':>5} {'cost':>8} {'smt_ok':>6} {'smt_err':>7} {'fallbk':>6} {'rd_blk':>6} {'gr_blk':>6}")
+    print("-" * 95)
     for s in sessions:
         ts = parse_ts(s["stem"]) or s["stem"][-19:]
         turns = str(s["turns"]) if s["turns"] is not None else "?"
         cost = f"${s['cost']:.4f}" if s["cost"] is not None else "?"
-        print(f"  {ts:<43} {turns:>5} {cost:>8} {s['smt_ok']:>6} {s['smt_err']:>7} {s['fallback']:>6}")
+        rb = len(s["read_blocked"])
+        gb = len(s["grep_blocked"])
+        print(f"  {ts:<43} {turns:>5} {cost:>8} {s['smt_ok']:>6} {s['smt_err']:>7} {s['fallback']:>6} {rb:>6} {gb:>6}")
 
     # Task differences
     tasks = [s["task"] for s in sessions]
@@ -445,16 +607,22 @@ def print_comparison(instance: str, sessions: list, repo: str = "."):
         new_grep_flag = len(s2["grep_flag_errors"]) - len(s1["grep_flag_errors"])
         new_smt_err = s2["smt_err"] - s1["smt_err"]
         new_fallback = s2["fallback"] - s1["fallback"]
+        new_read_blk = len(s2["read_blocked"]) - len(s1["read_blocked"])
+        new_grep_blk = len(s2["grep_blocked"]) - len(s1["grep_blocked"])
         if verdict == "REGRESSED":
             print(f"\nREGRESSION CAUSES:")
             if new_grep_flag > 0:
                 print(f"  [HIGH] +{new_grep_flag} smt grep --head/--head_limit errors (now fixed: added --head_limit alias)")
+            if new_read_blk > 0:
+                print(f"  [HIGH] +{new_read_blk} full-file Read blocks -> wasted turns")
+            if new_grep_blk > 0:
+                print(f"  [HIGH] +{new_grep_blk} Grep tool blocks -> agent should use smt grep directly")
             if new_smt_err > 0:
                 print(f"  [MED]  +{new_smt_err} additional smt command errors")
             if new_fallback > 0:
                 print(f"  [MED]  +{new_fallback} additional fallback bash calls")
             if len(set(tasks)) > 1:
-                print(f"  [INFO] task prompt changed between runs — broader task = more turns expected")
+                print(f"  [INFO] task prompt changed between runs -- broader task = more turns expected")
     print()
 
     # Individual session details
