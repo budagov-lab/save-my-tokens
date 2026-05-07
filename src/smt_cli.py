@@ -235,7 +235,7 @@ graph analysis:
                         help='Restrict to a specific field (default: name + doc)')
     p_grep.add_argument('--type', dest='type_filter', default=None,
                         help='Filter by node type: Function, Class, etc.')
-    p_grep.add_argument('--top', type=int, default=20)
+    p_grep.add_argument('--top', '--head_limit', '--head', dest='top', type=int, default=20)
     p_grep.add_argument('--module', default=None,
                         help='Filter by file path fragment (e.g. --module adapters)')
 

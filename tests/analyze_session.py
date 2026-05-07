@@ -1,21 +1,64 @@
 #!/usr/bin/env python3
-"""Analyze SMT session logs (.jsonl) for failure patterns and improvement insights."""
+"""Analyze SMT benchmark session logs (.jsonl) for failure patterns and regression causes.
+
+Usage:
+  python tests/analyze_session.py                       # all files in default runs dir
+  python tests/analyze_session.py <file_or_dir> ...     # explicit paths
+"""
 
 import json
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Windows consoles default to cp1251; force UTF-8 so em-dashes and task strings render.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+RUNS_DIR = Path("C:/Users/LENOVO/Desktop/Projects/bench/SWE_Context_lite/runs")
+
+
+# ---------------------------------------------------------------------------
+# Loading
+# ---------------------------------------------------------------------------
 
 def load_events(path: str):
     return [json.loads(l) for l in open(path, encoding="utf-8")]
 
 
+def extract_task(events) -> str:
+    """Extract the task description from the SMT Analyst system prompt."""
+    for e in events:
+        if e.get("type") == "user":
+            for m in e.get("message", {}).get("content", []):
+                if isinstance(m, dict) and m.get("type") == "text":
+                    text = m.get("text", "")
+                    match = re.search(r"\*\*Task:\*\*\s*(.+?)(?:\n|$)", text)
+                    if match:
+                        return match.group(1).strip()
+    return "?"
+
+
+def extract_skill_md(events) -> str:
+    """Return the full SKILL.md system prompt text (the SMT Analyst block)."""
+    for e in events:
+        if e.get("type") == "user":
+            for m in e.get("message", {}).get("content", []):
+                if isinstance(m, dict) and m.get("type") == "text" and "SMT Analyst" in m.get("text", ""):
+                    return m["text"]
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Timeline extraction
+# ---------------------------------------------------------------------------
+
 def extract_timeline(events):
-    """Return ordered list of (turn, role, tool_name, input, result, is_error)."""
-    tool_map = {}  # id -> (name, input)
-    result_map = {}  # id -> (content, is_error)
+    """Return ordered list of tool-call dicts: turn, name, input, result, is_error."""
+    tool_map = {}
+    result_map = {}
 
     for e in events:
         if e.get("type") == "assistant":
@@ -31,7 +74,17 @@ def extract_timeline(events):
                         content = " ".join(
                             c.get("text", "") for c in content if isinstance(c, dict)
                         )
-                    is_error = str(content).startswith("Exit code") and "Exit code 0" not in str(content)
+                    # Prefer explicit is_error field; fall back to Exit code pattern
+                    explicit = m.get("is_error")
+                    if explicit is True:
+                        is_error = True
+                    elif explicit is False:
+                        is_error = False
+                    else:
+                        is_error = (
+                            str(content).startswith("Exit code")
+                            and "Exit code 0" not in str(content)
+                        )
                     result_map[tid] = (str(content), is_error)
 
     timeline = []
@@ -52,14 +105,17 @@ def extract_timeline(events):
     return timeline
 
 
+# ---------------------------------------------------------------------------
+# Analysis helpers
+# ---------------------------------------------------------------------------
+
 def classify_bash(cmd: str):
-    """Return category tag for a bash command."""
     cmd = cmd.strip()
     if cmd.startswith("smt "):
         parts = cmd.split()
         sub = parts[1] if len(parts) > 1 else "?"
         return f"smt:{sub}"
-    for tool in ("grep", "sed", "find", "cat", "head", "tail", "awk"):
+    for tool in ("grep", "sed", "find", "cat", "head", "tail", "awk", "findstr"):
         if cmd.startswith(tool) or f" {tool} " in cmd or f"|{tool}" in cmd or f"| {tool}" in cmd:
             return f"direct:{tool}"
     if cmd.startswith("git "):
@@ -71,9 +127,11 @@ def classify_bash(cmd: str):
 
 def find_flag_errors(timeline):
     """Detect --compact/--brief used on commands that don't support them."""
+    unsupported = {
+        "search", "view", "list", "scope", "modules", "hot", "unused",
+        "cycles", "bottleneck", "changes", "path", "status", "build", "sync", "grep",
+    }
     bad = []
-    unsupported = {"search", "view", "list", "scope", "modules", "hot", "unused",
-                   "cycles", "bottleneck", "changes", "path", "status", "build", "sync"}
     for t in timeline:
         if t["name"] != "Bash":
             continue
@@ -87,8 +145,20 @@ def find_flag_errors(timeline):
     return bad
 
 
+def find_grep_flag_errors(timeline):
+    """Detect smt grep called with --head_limit or --head (Exit code 2 unrecognized args)."""
+    bad = []
+    for t in timeline:
+        if t["name"] != "Bash":
+            continue
+        cmd = t["input"].get("command", "").strip()
+        if re.match(r"smt\s+grep\b", cmd) and re.search(r"--head(?:_limit)?", cmd):
+            bad.append((cmd[:100], t["is_error"]))
+    return bad
+
+
 def find_scope_errors(timeline):
-    """Detect smt scope called with dot-notation or missing extension."""
+    """Detect smt scope called with errors."""
     bad = []
     for t in timeline:
         if t["name"] != "Bash" or not t["is_error"]:
@@ -111,6 +181,17 @@ def find_list_errors(timeline):
     return bad
 
 
+def find_lookup_regenerations(timeline):
+    """Count times smt lookup triggered full embedding regeneration."""
+    count = 0
+    for t in timeline:
+        if t["name"] == "Bash":
+            cmd = t["input"].get("command", "").strip()
+            if cmd.startswith("smt lookup") and "Generating embeddings" in t["result"]:
+                count += 1
+    return count
+
+
 def compute_smt_vs_fallback(timeline):
     bash = [t for t in timeline if t["name"] == "Bash"]
     smt = [t for t in bash if t["input"].get("command", "").strip().startswith("smt ")]
@@ -121,135 +202,301 @@ def compute_smt_vs_fallback(timeline):
 
 
 def first_fallback_turn(timeline):
-    """Turn number where first non-smt bash command appears."""
     for t in timeline:
         if t["name"] == "Bash" and not t["input"].get("command", "").strip().startswith("smt "):
             return t["turn"]
     return None
 
 
-def find_search_regenerations(timeline):
-    """Count times smt search triggered full embedding regeneration."""
-    count = 0
+def smt_subcommand_counts(timeline):
+    counts = Counter()
     for t in timeline:
-        if t["name"] == "Bash" and t["input"].get("command", "").strip().startswith("smt search"):
-            if "Generating embeddings" in t["result"]:
-                count += 1
-    return count
+        if t["name"] != "Bash":
+            continue
+        cmd = t["input"].get("command", "").strip()
+        m = re.match(r"smt\s+(\w[\w-]*)", cmd)
+        if m:
+            counts[m.group(1)] += 1
+    return counts
 
 
-def optimal_smt_path(task_hint: str = ""):
-    """Suggest the optimal SMT lookup sequence for common patterns."""
-    return [
-        "smt scope <filename.py>      -> see all imports/exports at a glance",
-        "smt context <symbol> --depth 2 --compact  -> understand call context",
-        "smt definition <symbol> --compact --brief -> quick signature lookup",
-    ]
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def git_log_between(after_iso: str, before_iso: str, repo: str = ".") -> list:
+    """Return list of (hash, date, subject) for commits in the time window."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", repo, "log", "--oneline",
+             f"--after={after_iso}", f"--before={before_iso}",
+             "--format=%h %ai %s"],
+            stderr=subprocess.DEVNULL, text=True
+        )
+        lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
+        return lines
+    except Exception:
+        return []
 
 
-def print_report(path: str):
+def parse_ts(stem: str) -> str:
+    """Extract ISO timestamp from filename stem like psf__requests-863__smt__2026-05-07T15-52-18."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$", stem)
+    if m:
+        return f"{m.group(1)}T{m.group(2)}:{m.group(3)}:{m.group(4)}"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Single-session report
+# ---------------------------------------------------------------------------
+
+def analyze_one(path: str) -> dict:
     events = load_events(path)
     timeline = extract_timeline(events)
+    task = extract_task(events)
+    skill_md = extract_skill_md(events)
 
     bash, smt_ok, smt_err, fallback = compute_smt_vs_fallback(timeline)
-    flag_errors = find_flag_errors(timeline)
-    scope_errors = find_scope_errors(timeline)
-    list_errors = find_list_errors(timeline)
-    regen_count = find_search_regenerations(timeline)
-    pivot_turn = first_fallback_turn(timeline)
-
     result_event = next((e for e in events if e.get("type") == "result"), None)
-    outcome = result_event.get("subtype", "?") if result_event else "?"
 
-    label = Path(path).stem
+    return dict(
+        path=path,
+        stem=Path(path).stem,
+        task=task,
+        skill_md=skill_md,
+        outcome=result_event.get("subtype", "?") if result_event else "?",
+        turns=result_event.get("num_turns") if result_event else None,
+        cost=result_event.get("total_cost_usd") if result_event else None,
+        cache_read=(result_event or {}).get("usage", {}).get("cache_read_input_tokens", 0),
+        output_tokens=(result_event or {}).get("usage", {}).get("output_tokens", 0),
+        smt_ok=len(smt_ok),
+        smt_err=len(smt_err),
+        fallback=len(fallback),
+        smt_counts=smt_subcommand_counts(timeline),
+        flag_errors=find_flag_errors(timeline),
+        grep_flag_errors=find_grep_flag_errors(timeline),
+        scope_errors=find_scope_errors(timeline),
+        list_errors=find_list_errors(timeline),
+        regen_count=find_lookup_regenerations(timeline),
+        pivot_turn=first_fallback_turn(timeline),
+        timeline=timeline,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-session comparison
+# ---------------------------------------------------------------------------
+
+def group_by_instance(paths):
+    """Group file paths by instance name, return {instance: [sorted paths]}."""
+    groups = defaultdict(list)
+    for p in paths:
+        stem = Path(p).stem
+        # psf__requests-863__smt__2026-05-07T15-52-18
+        m = re.match(r"(.+?)__smt__(.+)$", stem)
+        if m:
+            groups[m.group(1)].append(p)
+        else:
+            groups[stem].append(p)
+    # Sort each group by timestamp
+    for k in groups:
+        groups[k].sort(key=lambda p: parse_ts(Path(p).stem))
+    return dict(groups)
+
+
+def diff_skill_md(md1: str, md2: str) -> list:
+    """Return list of lines added in md2 vs md1 (simple line diff)."""
+    set1 = set(md1.splitlines())
+    set2 = set(md2.splitlines())
+    return sorted(set2 - set1)
+
+
+# ---------------------------------------------------------------------------
+# Printing
+# ---------------------------------------------------------------------------
+
+def print_single(s: dict):
+    label = Path(s["path"]).stem
     print(f"{'='*70}")
     print(f"SESSION: {label}")
-    print(f"OUTCOME: {outcome}")
+    print(f"OUTCOME: {s['outcome']}  |  turns={s['turns']}  |  cost=${s['cost']:.4f}")
+    print(f"TASK:    {s['task']}")
     print(f"{'='*70}")
-    print()
 
-    # --- Call distribution ---
-    print(f"CALL DISTRIBUTION  (total bash: {len(bash)})")
-    print(f"  smt success   : {len(smt_ok):3d}  ({100*len(smt_ok)//max(len(bash),1):2d}%)")
-    print(f"  smt errors    : {len(smt_err):3d}  ({100*len(smt_err)//max(len(bash),1):2d}%)")
-    print(f"  fallback calls: {len(fallback):3d}  ({100*len(fallback)//max(len(bash),1):2d}%)")
-    if pivot_turn:
-        print(f"  agent pivoted to grep/sed at turn {pivot_turn}")
-    print()
+    bash_total = s["smt_ok"] + s["smt_err"] + s["fallback"]
+    print(f"\nCALL DISTRIBUTION  (total bash: {bash_total})")
+    print(f"  smt success   : {s['smt_ok']:3d}")
+    print(f"  smt errors    : {s['smt_err']:3d}")
+    print(f"  fallback      : {s['fallback']:3d}")
+    if s["pivot_turn"]:
+        print(f"  first fallback at turn {s['pivot_turn']}")
+    if s["smt_counts"]:
+        print(f"  smt breakdown : {dict(s['smt_counts'])}")
 
-    # --- Failure breakdown ---
-    if flag_errors:
-        print(f"INVALID FLAGS  ({len(flag_errors)} calls)  [--compact/--brief on unsupported cmd]")
-        for cmd in flag_errors:
+    if s["grep_flag_errors"]:
+        print(f"\nSMT GREP FLAG ERRORS  ({len(s['grep_flag_errors'])} calls)  [--head/--head_limit not supported; use --top]")
+        for cmd, is_err in s["grep_flag_errors"]:
+            status = "FAIL" if is_err else "ok"
+            print(f"  [{status}] {cmd}")
+
+    if s["flag_errors"]:
+        print(f"\nINVALID FLAGS  ({len(s['flag_errors'])} calls)  [--compact/--brief on unsupported cmd]")
+        for cmd in s["flag_errors"]:
             print(f"  {cmd[:90]}")
-        print()
 
-    if scope_errors:
-        print(f"SMT SCOPE ERRORS  ({len(scope_errors)} calls)  [dot-notation or missing extension]")
-        for cmd, res in scope_errors:
+    if s["scope_errors"]:
+        print(f"\nSMT SCOPE ERRORS  ({len(s['scope_errors'])} calls)")
+        for cmd, res in s["scope_errors"]:
             print(f"  CMD: {cmd[:80]}")
             print(f"  ERR: {res[:60]}")
-        print()
 
-    if list_errors:
-        print(f"SMT LIST EMPTY  ({len(list_errors)} calls)  [module path not matching stored paths]")
-        for cmd, res in list_errors:
+    if s["list_errors"]:
+        print(f"\nSMT LIST EMPTY  ({len(s['list_errors'])} calls)")
+        for cmd, _ in s["list_errors"]:
             print(f"  CMD: {cmd[:80]}")
-        print()
 
-    if regen_count:
-        print(f"EMBEDDING REGENERATIONS: {regen_count}  (expected 0 after smt build pre-builds index)")
-        print()
+    if s["regen_count"]:
+        print(f"\nEMBEDDING REGENERATIONS: {s['regen_count']}  (smt build should pre-build FAISS index)")
 
-    # --- Fallback analysis ---
-    if fallback:
-        cats = Counter(classify_bash(t["input"].get("command", "")) for t in fallback)
-        print(f"FALLBACK TOOL BREAKDOWN  ({len(fallback)} calls)")
-        for cat, cnt in cats.most_common():
-            print(f"  {cnt:3d}  {cat}")
-        print()
-
-    # --- What the optimal path would have been ---
-    print("OPTIMAL SMT PATH FOR THIS TASK")
-    print("  (exception handling analysis - find unwrapped imports)")
-    for step in [
-        "1. smt scope adapters.py          -> see all urllib3 imports and exports at a glance",
-        "2. smt context HTTPAdapter.send --depth 2 --compact  -> exception handling context",
-        "3. smt scope exceptions.py        -> confirm ContentDecodingError wraps DecodeError",
-        "   Done in 3 turns instead of 41",
-    ]:
-        print(f"  {step}")
-    print()
-
-    # --- Root causes ---
-    print("ROOT CAUSES (ranked by impact)")
     causes = []
-    if flag_errors:
-        causes.append(f"[HIGH] {len(flag_errors)} wasted turns: --compact/--brief on smt search/view")
-    if scope_errors:
-        causes.append(f"[HIGH] {len(scope_errors)} wasted turns: smt scope wrong syntax -> agent abandoned SMT at turn {pivot_turn}")
-    if list_errors:
-        causes.append(f"[MED]  {len(list_errors)} empty results: smt list --module path separator mismatch")
-    if regen_count:
-        causes.append(f"[MED]  {regen_count} embedding regeneration(s): FAISS index not pre-built by smt build")
+    if s["grep_flag_errors"]:
+        causes.append(f"[HIGH] {len(s['grep_flag_errors'])} smt grep --head/--head_limit calls -> Exit code 2 -> agent falls back")
+    if s["flag_errors"]:
+        causes.append(f"[HIGH] {len(s['flag_errors'])} --compact/--brief on unsupported commands")
+    if s["scope_errors"]:
+        causes.append(f"[MED]  {len(s['scope_errors'])} smt scope errors -> early fallback to grep/sed")
+    if s["list_errors"]:
+        causes.append(f"[MED]  {len(s['list_errors'])} smt list --module returning empty")
+    if s["regen_count"]:
+        causes.append(f"[MED]  {s['regen_count']} embedding regeneration(s)")
     if not causes:
         causes.append("[NONE] No systematic failures detected")
+    print(f"\nROOT CAUSES")
     for c in causes:
         print(f"  {c}")
     print()
 
-    # --- Fixes status ---
-    print("FIX STATUS")
-    print("  [DONE] --compact/--brief on search/view: SKILL.md updated with explicit warning")
-    print("  [DONE] smt scope: slash normalization + extension fallback (navigation.py)")
-    print("  [DONE] smt list --module: slash normalization fix applied (navigation.py)")
-    print("  [DONE] embedding regeneration: smt build now pre-builds FAISS index (build.py)")
+
+def print_comparison(instance: str, sessions: list, repo: str = "."):
+    """Print a before/after comparison for two or more sessions of the same instance."""
+    print(f"\n{'#'*70}")
+    print(f"# INSTANCE: {instance}  ({len(sessions)} sessions)")
+    print(f"{'#'*70}")
+
+    # Summary table
+    print(f"\n{'Session':<45} {'turns':>5} {'cost':>8} {'smt_ok':>6} {'smt_err':>7} {'fallbk':>6}")
+    print("-" * 80)
+    for s in sessions:
+        ts = parse_ts(s["stem"]) or s["stem"][-19:]
+        turns = str(s["turns"]) if s["turns"] is not None else "?"
+        cost = f"${s['cost']:.4f}" if s["cost"] is not None else "?"
+        print(f"  {ts:<43} {turns:>5} {cost:>8} {s['smt_ok']:>6} {s['smt_err']:>7} {s['fallback']:>6}")
+
+    # Task differences
+    tasks = [s["task"] for s in sessions]
+    if len(set(tasks)) > 1:
+        print(f"\nTASK DIFFERENCES (non-identical prompts across runs):")
+        for i, s in enumerate(sessions):
+            ts = parse_ts(s["stem"]) or s["stem"]
+            print(f"  [{ts}] {s['task'][:100]}")
+    else:
+        print(f"\nTASK: {tasks[0][:100]} (identical across runs)")
+
+    # Git changes between first and last session
+    if len(sessions) >= 2:
+        t_first = parse_ts(sessions[0]["stem"])
+        t_last = parse_ts(sessions[-1]["stem"])
+        if t_first and t_last:
+            commits = git_log_between(t_first, t_last, repo)
+            print(f"\nGIT COMMITS between {t_first} and {t_last}:")
+            if commits:
+                for c in commits:
+                    print(f"  {c}")
+            else:
+                print("  (none — same code base)")
+
+    # SKILL.md diff between first and last
+    if len(sessions) >= 2:
+        added = diff_skill_md(sessions[0]["skill_md"], sessions[-1]["skill_md"])
+        removed_lines = diff_skill_md(sessions[-1]["skill_md"], sessions[0]["skill_md"])
+        if added or removed_lines:
+            print(f"\nSKILL.md CHANGES (first -> last):")
+            for l in added[:10]:
+                if l.strip():
+                    print(f"  + {l[:100]}")
+            for l in removed_lines[:10]:
+                if l.strip():
+                    print(f"  - {l[:100]}")
+        else:
+            print(f"\nSKILL.md: identical across runs")
+
+    # Regression analysis (compare each pair)
+    if len(sessions) >= 2:
+        s1, s2 = sessions[0], sessions[-1]
+        c1 = s1["cost"] or 0
+        c2 = s2["cost"] or 0
+        delta_cost = c2 - c1
+        delta_turns = (s2["turns"] or 0) - (s1["turns"] or 0)
+        verdict = "IMPROVED" if delta_cost < -0.005 else "REGRESSED" if delta_cost > 0.005 else "SIMILAR"
+        print(f"\nVERDICT: {verdict}  (dcost={delta_cost:+.4f}, dturns={delta_turns:+d})")
+
+        # New errors in s2 not seen in s1
+        new_grep_flag = len(s2["grep_flag_errors"]) - len(s1["grep_flag_errors"])
+        new_smt_err = s2["smt_err"] - s1["smt_err"]
+        new_fallback = s2["fallback"] - s1["fallback"]
+        if verdict == "REGRESSED":
+            print(f"\nREGRESSION CAUSES:")
+            if new_grep_flag > 0:
+                print(f"  [HIGH] +{new_grep_flag} smt grep --head/--head_limit errors (now fixed: added --head_limit alias)")
+            if new_smt_err > 0:
+                print(f"  [MED]  +{new_smt_err} additional smt command errors")
+            if new_fallback > 0:
+                print(f"  [MED]  +{new_fallback} additional fallback bash calls")
+            if len(set(tasks)) > 1:
+                print(f"  [INFO] task prompt changed between runs — broader task = more turns expected")
     print()
+
+    # Individual session details
+    for s in sessions:
+        print_single(s)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def collect_paths(args) -> list:
+    paths = []
+    for arg in args:
+        p = Path(arg)
+        if p.is_dir():
+            paths.extend(sorted(p.glob("*.jsonl")))
+        elif p.is_file():
+            paths.append(p)
+        else:
+            print(f"Warning: {arg} not found", file=sys.stderr)
+    return [str(p) for p in paths]
 
 
 if __name__ == "__main__":
-    paths = sys.argv[1:] or sorted(
-        Path("tests/fixtures").glob("*.jsonl")
-    )
-    for p in paths:
-        print_report(str(p))
+    raw_args = sys.argv[1:]
+    if raw_args:
+        paths = collect_paths(raw_args)
+    else:
+        paths = collect_paths([RUNS_DIR])
+
+    if not paths:
+        print(f"No .jsonl files found. Pass a directory or file path as argument.")
+        sys.exit(1)
+
+    groups = group_by_instance(paths)
+    if len(groups) == 1 and len(list(groups.values())[0]) == 1:
+        # Single file: just print the report
+        print_single(analyze_one(paths[0]))
+    else:
+        # Multi-file: group by instance and compare
+        smt_repo = str(Path(__file__).parent.parent)
+        for instance, inst_paths in sorted(groups.items()):
+            sessions = [analyze_one(p) for p in inst_paths]
+            print_comparison(instance, sessions, repo=smt_repo)
