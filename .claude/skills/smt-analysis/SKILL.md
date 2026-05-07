@@ -14,7 +14,7 @@ argument-hint: [symbol-or-question]
 
 ## Auto-context (symbols found in this task)
 
-!`smt orient $ARGUMENTS 2>/dev/null`
+!`smt orient "$ARGUMENTS" 2>/dev/null`
 
 | Status | Action |
 |---|---|
@@ -84,7 +84,7 @@ If `smt grep X` returns nothing: the symbol may not exist in this checkout. Use 
 
 - `cd` anywhere — the working directory is already the project root  
 - `findstr`, `Get-Content`, `Select-String` — this is bash; use `smt grep`  
-- `Read <file>` after `smt view` — smt view already shows the source lines  
+- `Read <file>` without offset — always run `smt scope <file>` or `smt view <symbol>` first, then `Read` with offset+limit  
 - Re-running the same query to "verify" — trust the first result  
 - Using `smt view X --depth N` — `--depth` is not a view flag; use `smt context X --depth N`  
 

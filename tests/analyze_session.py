@@ -38,6 +38,15 @@ def extract_task(events) -> str:
                     match = re.search(r"\*\*Task:\*\*\s*(.+?)(?:\n|$)", text)
                     if match:
                         return match.group(1).strip()
+    # T23+ format: no **Task:** user message — fall back to first smt-analysis Skill call args
+    for e in events:
+        if e.get("type") == "assistant":
+            for m in e.get("message", {}).get("content", []):
+                if isinstance(m, dict) and m.get("type") == "tool_use" and m.get("name") == "Skill":
+                    if m.get("input", {}).get("skill") == "smt-analysis":
+                        args = m["input"].get("args", "")
+                        if args:
+                            return str(args)[:200]
     return "?"
 
 
@@ -849,7 +858,7 @@ def _batch_label(s: dict) -> str:
 
 def print_global_report(all_sessions: list):
     """Print a cross-batch comparison table for every tool-call metric."""
-    # Group into batches by hour (T15 vs T17 or generic A/B)
+    # Group into batches by hour (T15 vs T17 vs T23 …)
     batch_map: dict = defaultdict(list)
     for s in all_sessions:
         batch_map[_batch_label(s)].append(s)
@@ -858,16 +867,20 @@ def print_global_report(all_sessions: list):
     if len(batches) < 2:
         return  # nothing to compare
 
-    b1_label, b2_label = batches[0], batches[1]
+    # Compare baseline (first) vs latest (last); intermediate batches appear in matrix rows
+    b1_label = batches[0]
+    b2_label = batches[-1]
     b1, b2 = batch_map[b1_label], batch_map[b2_label]
 
     def agg(sessions, fn):
         vals = [fn(s) for s in sessions]
         return sum(vals), sum(vals) / max(len(vals), 1)
 
-    W = 16
     print("=" * 70)
-    print("GLOBAL CROSS-BATCH COMPARISON  (all sessions)")
+    print(f"GLOBAL CROSS-BATCH COMPARISON  ({len(batches)} batches: {', '.join(batches)})")
+    if len(batches) > 2:
+        mid = ', '.join(batches[1:-1])
+        print(f"  Baseline={b1_label}  Latest={b2_label}  (intermediate: {mid})")
     print("=" * 70)
     print(f"\n{'Metric':<20} {'batch '+b1_label+' total':>16} {'avg':>6}  {'batch '+b2_label+' total':>16} {'avg':>6}  {'trend':>8}")
     print("-" * 80)
@@ -933,17 +946,20 @@ def print_global_report(all_sessions: list):
         row += f" | {total_err:>4} {cost_s:>7} {str(s['turns'] or '?'):>5}"
         print(row)
 
-    # Git commit timeline — what changed between batch 1 and batch 2
-    t_b1_last = max((parse_ts(s["stem"]) for s in b1), default="")
-    t_b2_first = min((parse_ts(s["stem"]) for s in b2), default="")
+    # Git commit timelines between every consecutive batch pair
     smt_repo = str(Path(__file__).parent.parent)
-    if t_b1_last and t_b2_first:
-        commits = git_log_between(t_b1_last, t_b2_first, smt_repo)
-        print(f"\nGIT COMMITS between last {b1_label} run ({t_b1_last}) and first {b2_label} run ({t_b2_first}):")
+    for i in range(len(batches) - 1):
+        ba_label, bb_label = batches[i], batches[i + 1]
+        ba, bb = batch_map[ba_label], batch_map[bb_label]
+        t_a_last = max((parse_ts(s["stem"]) for s in ba), default="")
+        t_b_first = min((parse_ts(s["stem"]) for s in bb), default="")
+        if not (t_a_last and t_b_first):
+            continue
+        commits = git_log_between(t_a_last, t_b_first, smt_repo)
+        print(f"\nGIT COMMITS  batch {ba_label} -> {bb_label}  ({t_a_last} … {t_b_first}):")
         if commits:
             for c in commits:
                 print(f"  {c}")
-            # Annotate which patterns each commit likely affects
             for c in commits:
                 msg = c.lower()
                 affects = []
@@ -955,12 +971,14 @@ def print_global_report(all_sessions: list):
                     affects.append("P03_grep_wrong_flag")
                 if "dotenv" in msg or ".env" in msg:
                     affects.append("P10_dotenv_errors")
+                if "orient" in msg or "argument" in msg:
+                    affects.append("skill_ERR_parens")
                 if affects:
                     print(f"    -> likely affects: {', '.join(affects)}")
         else:
             print("  (none)")
 
-    # Summary verdict
+    # Summary verdict (baseline vs latest)
     print(f"\nSUMMARY  ({b1_label} -> {b2_label})")
     if regressions:
         regressions.sort(key=lambda x: x[3], reverse=True)

@@ -91,8 +91,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     if tool_name == "Grep":
         pattern = tool_input.get("pattern", "")
-        short = pattern[:60]
-        _deny(f"Grep blocked. Use: smt grep \"{short}\" / smt definition <symbol> / smt list --module <path>.")
+        short = pattern[:60].replace('"', '\\"')
+        _deny(f'Grep blocked. Run: smt grep "{short}"')
         return
 
 
