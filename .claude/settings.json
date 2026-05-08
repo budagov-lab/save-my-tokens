@@ -58,6 +58,16 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/smt_agent_hook.py"
+          }
+        ]
+      }
     ]
   },
   "permissions": {

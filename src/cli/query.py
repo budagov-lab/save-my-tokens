@@ -772,7 +772,13 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
     exact-match Function/Class symbols, so the agent has callers + callees pre-loaded
     and can proceed directly to reasoning on Turn 1 without any follow-up queries.
     """
-    task = " ".join(task_words)
+    project_path = _resolve_project_path()
+    task_file = project_path / ".smt" / "task.txt"
+    if task_file.exists():
+        saved = task_file.read_text(encoding="utf-8").strip()
+        task = saved if saved else " ".join(task_words)
+    else:
+        task = " ".join(task_words)
 
     # Extract CamelCase (likely class/method names) and long snake_case (likely function names).
     camel = re.findall(r'\b[A-Z][a-z][A-Za-z]{2,}\b', task)
@@ -792,7 +798,6 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
     if not terms:
         return 0  # nothing to orient on — agent will figure it out
 
-    project_path = _resolve_project_path()
     if not _require_git(project_path):
         return 0  # silently skip if not in a git repo
 

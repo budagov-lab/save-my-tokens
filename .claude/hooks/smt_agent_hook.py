@@ -144,6 +144,20 @@ def main() -> None:
     except Exception:
         sys.exit(0)
 
+    # ------------------------------------------------------------------
+    # UserPromptSubmit — capture original user question before agent paraphrases it
+    # ------------------------------------------------------------------
+    if event.get("hook_event_name") == "UserPromptSubmit":
+        prompt = event.get("prompt", "").strip()
+        if prompt:
+            task_file = _PROJECT_ROOT / ".smt" / "task.txt"
+            try:
+                task_file.parent.mkdir(exist_ok=True)
+                task_file.write_text(prompt, encoding="utf-8")
+            except Exception:
+                pass
+        sys.exit(0)
+
     tool_name = event.get("tool_name", "")
     tool_input = event.get("tool_input", {})
 
