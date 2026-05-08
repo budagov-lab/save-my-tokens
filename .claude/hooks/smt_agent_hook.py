@@ -4,7 +4,7 @@ PreToolUse hook — five responsibilities:
 
 1. Agent (Explore)       → deny outright (too token-heavy)
 2. advisor               → inject SMT skill via additionalContext
-3. Read (full-file, src) → whitelist small files; redirect large files with smt scope output
+3. Read (full-file, src) → allow small files (≤ LINE_LIMIT lines); redirect large files with smt scope output
 4. Grep                  → deny and suggest smt grep
 5. Bash (Windows tools)  → intercept findstr/Get-Content/Select-String, run smt grep
 """
@@ -29,12 +29,7 @@ _SMT_CLI = _PROJECT_ROOT / "src" / "smt_cli.py"
 
 _SOURCE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".cs"}
 
-# Small pure-definition files — no graph traversal adds value; always allow direct Read
-_SMALL_FILE_WHITELIST = {
-    "exceptions.py", "hooks.py", "compat.py", "auth.py",
-    "structures.py", "status_codes.py", "cookies.py",
-}
-_SMALL_FILE_LINE_LIMIT = 80  # also allow files short enough to fit in one screen
+_SMALL_FILE_LINE_LIMIT = 80  # files this short are allowed through — no graph traversal needed
 
 def _win_tool_invoked(cmd: str):
     """Return (True, tool_name) only when findstr/Get-Content/Select-String is
@@ -151,11 +146,7 @@ def main() -> None:
         if p.suffix not in _SOURCE_EXTS:
             sys.exit(0)  # not source code — allow
 
-        # Whitelist: small well-known definition-only files
-        if p.name in _SMALL_FILE_WHITELIST:
-            sys.exit(0)
-
-        # Also allow any file short enough to read in full without waste
+        # Allow any file short enough to read in full without waste
         try:
             line_count = sum(1 for _ in open(file_path, encoding="utf-8", errors="replace"))
             if line_count <= _SMALL_FILE_LINE_LIMIT:
