@@ -768,8 +768,9 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
     The output is injected into the skill prompt so the agent starts with
     relevant graph context already visible, reducing lookup turns.
 
-    --source: also print smt view source for the top 2 Function/Class symbols found,
-    so the agent has source bodies available without a follow-up Read call.
+    --source: also run smt context --depth 2 --compact --compress for the top 3
+    exact-match Function/Class symbols, so the agent has callers + callees pre-loaded
+    and can proceed directly to reasoning on Turn 1 without any follow-up queries.
     """
     task = " ".join(task_words)
 
@@ -802,7 +803,7 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
         print("## Graph context (auto-extracted from task)\n")
 
         found_any = False
-        top_symbols: list = []  # (name,) for source injection — max 2 Function/Class
+        top_symbols: list = []  # symbol names for context injection — max 3 Function/Class
 
         for term in terms:
             with client.driver.session() as session:
@@ -834,23 +835,25 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
                 except (ValueError, TypeError):
                     display = r.get('file') or '?'
                 print(f"  {r['name']}  [{r['ltype']}]  {display}:{r.get('line', '?')}")
-                # Collect first Function/Class hit per term for source injection
+                # Collect exact-match Function/Class hits for context injection
                 if (with_source
-                        and len(top_symbols) < 2
+                        and len(top_symbols) < 3
                         and r['ltype'] in ('Function', 'Class')
-                        and r['name'] not in top_symbols):
+                        and r['name'] not in top_symbols
+                        and r['name'].lower() == term.lower()):
                     top_symbols.append(r['name'])
             print()
 
         if not found_any:
             print("(no graph matches for task terms — use smt grep manually)\n")
 
-        # Source injection: show symbol bodies so agent has source without a Read call
+        # Context injection: run smt context on top symbols so the agent has
+        # callers + callees pre-loaded and can go straight to reasoning on Turn 1.
         if with_source and top_symbols:
-            print("## Auto-context (symbols found in this task)\n")
+            print("## Auto-context (callers + callees for task symbols)\n")
             for sym in top_symbols:
-                print(f"```  smt view {sym}")
-                cmd_view(sym)
+                print(f"```  smt context {sym} --depth 2 --compact --compress")
+                cmd_context(sym, depth=2, compact=True, compress=True)
                 print("```\n")
 
         return 0

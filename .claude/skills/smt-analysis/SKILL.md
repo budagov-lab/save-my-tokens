@@ -12,7 +12,7 @@ argument-hint: [symbol-or-question]
 
 !`smt status 2>&1 | head -5`
 
-## Auto-context (symbols found in this task)
+## Auto-context (callers + callees pre-loaded)
 
 !`smt orient "$ARGUMENTS" --source 2>/dev/null`
 
@@ -29,16 +29,33 @@ argument-hint: [symbol-or-question]
 **Do NOT `cd` anywhere before running smt — especially not `cd .claude/skills/smt-analysis`.**  
 The working directory is already the project root.
 
-## Turn 1 — pick one shortcut and run it
+## Turn 1 — check orient output first, then query
 
-| Task says | Run |
+**Orient already ran above.** If it injected `smt context` output for your key symbols, you have callers + callees pre-loaded — proceed directly to reasoning. Only run additional commands if:
+- The symbol was not found by orient (not in graph → use `smt grep`)
+- You need deeper callers (`smt impact X --depth 3`)
+- A second symbol wasn't covered
+
+**If orient did NOT find the symbol** → run:
+```bash
+smt context X --depth 2 --compact --compress
+```
+This gives you: location, what it calls, and who calls it — in one command. Do NOT substitute grep + view + scope loops for this.
+
+**If the task is "what breaks / what changes / what is affected by changing X"** → use:
+```bash
+smt impact X --depth 3
+```
+If X is a concept (not a symbol), use `smt grep <concept>` to identify the key symbols, then immediately run `smt impact sym1 --depth 3 && smt impact sym2 --depth 3`. Do NOT substitute grep/Read/scope loops for impact traversal.
+
+| Situation | Run |
 |---|---|
-| "where is X" / "how does X work" | `smt grep X && smt view X` |
-| "what do I need to work on X" | `smt context X --depth 2 --compact --compress && smt view X` |
-| "what breaks if I change X" | `smt impact X --depth 3` |
+| orient injected context for your symbol | Skip — go straight to reasoning |
+| symbol not found by orient | `smt context X --depth 2 --compact --compress` |
+| "what breaks / what changes if I change X" | `smt impact X --depth 3` |
 | "who calls X" | `smt context X --callers` |
+| concept only, no symbol | `smt grep <concept>` → get symbols → then `smt context` or `smt impact` |
 | file name mentioned | `smt scope requests/file.py` (full relative path, not basename) |
-| broad concept, no symbol | `smt grep <concept>` then pick symbols |
 
 Batch independent queries with `&&` — never waste a turn on a single lookup.
 
