@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook — five responsibilities:
+Hook handler for PreToolUse and PostToolUse events.
 
+PreToolUse responsibilities:
 1. Agent (Explore)       → deny outright (too token-heavy)
 2. advisor               → inject SMT skill via additionalContext
-3. Read (full-file, src) → allow small files (≤ LINE_LIMIT lines); redirect large files with smt scope output
+3. Read (full-file, src) → allow small files (≤ LINE_LIMIT); redirect large files with
+                           smt list + smt view bodies so agent gets source inline
 4. Grep                  → deny and suggest smt grep
 5. Bash (Windows tools)  → intercept findstr/Get-Content/Select-String, run smt grep
+
+PostToolUse responsibilities:
+6. Skill (smt-analysis)  → inject follow-up reminder: use smt view, not Read
 """
 import json
 import os
@@ -50,16 +55,42 @@ def _win_tool_invoked(cmd: str):
 
 
 def _run_smt(*args: str, timeout: int = 12) -> str:
-    """Run a smt command via the project venv and return stdout."""
+    """Run a smt command, trying venv Python first then local smt script."""
+    import shutil
+    if _VENV_PYTHON.exists():
+        cmd = [str(_VENV_PYTHON), str(_SMT_CLI)] + list(args)
+    else:
+        # Benchmark project: look for smt.bat / smt shell script next to the hook
+        for candidate in (_PROJECT_ROOT / "smt.bat", _PROJECT_ROOT / "smt"):
+            if candidate.exists():
+                cmd = [str(candidate)] + list(args)
+                break
+        else:
+            found = shutil.which("smt")
+            cmd = [found] + list(args) if found else None
+        if cmd is None:
+            return ""
     try:
-        r = subprocess.run(
-            [str(_VENV_PYTHON), str(_SMT_CLI)] + list(args),
-            capture_output=True, text=True, timeout=timeout,
-            cwd=str(_PROJECT_ROOT),
-        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           cwd=str(_PROJECT_ROOT))
         return (r.stdout or "").strip()
     except Exception:
         return ""
+
+
+def _top_symbols_from_file(file_path: str, max_syms: int = 2) -> list:
+    """Return up to max_syms Function/Class symbol names from a file via smt list."""
+    out = _run_smt("list", "--module", file_path)
+    if not out:
+        return []
+    syms = []
+    for line in out.splitlines():
+        m = re.match(r'\s+(\w+)\s+\[(?:Function|Class)\]', line)
+        if m:
+            syms.append(m.group(1))
+            if len(syms) >= max_syms:
+                break
+    return syms
 
 
 def load_skill() -> str:
@@ -75,6 +106,16 @@ def _deny(reason: str) -> None:
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
+        }
+    }))
+
+
+def _inject(context: str) -> None:
+    """Inject additional context after a PostToolUse event (no blocking)."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": context,
         }
     }))
 
@@ -108,6 +149,20 @@ def main() -> None:
 
     tool_name = event.get("tool_name", "")
     tool_input = event.get("tool_input", {})
+
+    # ------------------------------------------------------------------
+    # PostToolUse — event has tool_response; PreToolUse does not
+    # ------------------------------------------------------------------
+    if "tool_response" in event:
+        if tool_name == "Skill" and tool_input.get("skill") == "smt-analysis":
+            _inject(
+                "─── SMT reminder ───\n"
+                "You now have graph context. For source lines use smt view <symbol> — "
+                "not the Read tool.\n"
+                "smt view returns exact source with line numbers and needs no offset.\n"
+                "────────────────────"
+            )
+        return
 
     # ------------------------------------------------------------------
     # Agent spawns — block Explore outright
@@ -154,15 +209,25 @@ def main() -> None:
         except Exception:
             pass
 
-        # Larger source files: run smt scope and return the result inline
-        # so the agent gets the symbol list without consuming an extra turn.
+        # Larger source files: run smt list + smt view for top symbols,
+        # returning everything inline so the agent needs no follow-up calls.
+        parts = []
         scope_out = _run_smt("scope", file_path)
         if scope_out:
+            parts.append(scope_out)
+
+        top_syms = _top_symbols_from_file(file_path)
+        for sym in top_syms:
+            view_out = _run_smt("view", sym)
+            if view_out:
+                parts.append(f"--- smt view {sym} ---\n{view_out}")
+
+        if parts:
+            body = "\n\n".join(parts)
             _deny(
-                f"Full-file Read intercepted — here is smt scope for {p.name}:\n\n"
-                f"{scope_out}\n\n"
-                f"Next: smt view <symbol>  to see source lines. "
-                f"Or: Read with offset+limit once you know the line number."
+                f"Full-file Read intercepted — SMT output for {p.name}:\n\n"
+                f"{body}\n\n"
+                f"You have scope + source above. Use smt view <symbol> for more."
             )
         else:
             stem = p.stem

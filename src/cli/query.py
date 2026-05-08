@@ -834,11 +834,11 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
                 except (ValueError, TypeError):
                     display = r.get('file') or '?'
                 print(f"  {r['name']}  [{r['ltype']}]  {display}:{r.get('line', '?')}")
-                # Collect exact-match Function/Class for source injection
+                # Collect first Function/Class hit per term for source injection
                 if (with_source
                         and len(top_symbols) < 2
                         and r['ltype'] in ('Function', 'Class')
-                        and r['name'].lower() == term.lower()):
+                        and r['name'] not in top_symbols):
                     top_symbols.append(r['name'])
             print()
 
