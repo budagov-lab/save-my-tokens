@@ -151,18 +151,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     if event.get("hook_event_name") == "UserPromptSubmit":
         prompt = event.get("prompt", "").strip()
-        session_id = event.get("session_id", "")
         if prompt:
             task_file = _PROJECT_ROOT / ".smt" / "task.txt"
-            session_file = _PROJECT_ROOT / ".smt" / "task_session.txt"
             try:
                 task_file.parent.mkdir(exist_ok=True)
-                current_session = session_file.read_text(encoding="utf-8").strip() if session_file.exists() else ""
-                if current_session != session_id:
-                    # New session — write task and record session id
-                    task_file.write_text(prompt, encoding="utf-8")
-                    session_file.write_text(session_id, encoding="utf-8")
-                # Same session — keep the original first message, ignore this one
+                task_file.write_text(prompt, encoding="utf-8")
             except Exception:
                 pass
         sys.exit(0)
@@ -175,12 +168,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     if "tool_response" in event:
         if tool_name == "Skill" and tool_input.get("skill") == "smt-analysis":
-            # Clear task files so the next user message is treated as a new task
-            for fname in ("task.txt", "task_session.txt"):
-                try:
-                    (_PROJECT_ROOT / ".smt" / fname).unlink(missing_ok=True)
-                except Exception:
-                    pass
+            # Clear task so the next user message writes fresh
+            try:
+                (_PROJECT_ROOT / ".smt" / "task.txt").unlink(missing_ok=True)
+            except Exception:
+                pass
             _inject(
                 "─── SMT reminder ───\n"
                 "You now have graph context. For source lines use smt view <symbol> — "
