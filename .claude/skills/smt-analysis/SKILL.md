@@ -14,7 +14,7 @@ argument-hint: [symbol-or-question]
 
 ## Auto-context (symbols found in this task)
 
-!`smt orient "$ARGUMENTS" 2>/dev/null`
+!`smt orient "$ARGUMENTS" --source 2>/dev/null`
 
 | Status | Action |
 |---|---|

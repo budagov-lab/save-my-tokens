@@ -760,13 +760,16 @@ _STOP_WORDS = {
 }
 
 
-def cmd_orient(task_words: list) -> int:
+def cmd_orient(task_words: list, with_source: bool = False) -> int:
     """Pre-orient: extract symbol-like terms from task text and grep the graph for each.
 
     Designed to be run as the first command in the smt-analysis skill via:
-        !`smt orient $ARGUMENTS`
+        !`smt orient $ARGUMENTS --source`
     The output is injected into the skill prompt so the agent starts with
     relevant graph context already visible, reducing lookup turns.
+
+    --source: also print smt view source for the top 2 Function/Class symbols found,
+    so the agent has source bodies available without a follow-up Read call.
     """
     task = " ".join(task_words)
 
@@ -799,6 +802,8 @@ def cmd_orient(task_words: list) -> int:
         print("## Graph context (auto-extracted from task)\n")
 
         found_any = False
+        top_symbols: list = []  # (name,) for source injection — max 2 Function/Class
+
         for term in terms:
             with client.driver.session() as session:
                 # Match names only (not docstrings) so we find actual symbols,
@@ -829,10 +834,24 @@ def cmd_orient(task_words: list) -> int:
                 except (ValueError, TypeError):
                     display = r.get('file') or '?'
                 print(f"  {r['name']}  [{r['ltype']}]  {display}:{r.get('line', '?')}")
+                # Collect exact-match Function/Class for source injection
+                if (with_source
+                        and len(top_symbols) < 2
+                        and r['ltype'] in ('Function', 'Class')
+                        and r['name'].lower() == term.lower()):
+                    top_symbols.append(r['name'])
             print()
 
         if not found_any:
             print("(no graph matches for task terms — use smt grep manually)\n")
+
+        # Source injection: show symbol bodies so agent has source without a Read call
+        if with_source and top_symbols:
+            print("## Auto-context (symbols found in this task)\n")
+            for sym in top_symbols:
+                print(f"```  smt view {sym}")
+                cmd_view(sym)
+                print("```\n")
 
         return 0
     except Exception as e:
