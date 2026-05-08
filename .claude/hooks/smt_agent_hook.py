@@ -24,12 +24,6 @@ _HOOK_DIR = Path(__file__).parent
 _PROJECT_ROOT = _HOOK_DIR.parent.parent
 _SKILL_MD = os.path.normpath(str(_HOOK_DIR / ".." / "skills" / "smt-analysis" / "SKILL.md"))
 
-# Venv Python for running smt commands inside the hook
-_VENV_PYTHON = (
-    _PROJECT_ROOT / "venv" / "Scripts" / "python.exe"
-    if sys.platform == "win32"
-    else _PROJECT_ROOT / "venv" / "bin" / "python"
-)
 _SMT_CLI = _PROJECT_ROOT / "src" / "smt_cli.py"
 
 _SOURCE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".c", ".cpp", ".cs"}
@@ -55,21 +49,24 @@ def _win_tool_invoked(cmd: str):
 
 
 def _run_smt(*args: str, timeout: int = 12) -> str:
-    """Run a smt command, trying venv Python first then local smt script."""
-    import shutil
-    if _VENV_PYTHON.exists():
-        cmd = [str(_VENV_PYTHON), str(_SMT_CLI)] + list(args)
+    """Run a smt command using the Python that is already running this hook.
+
+    sys.executable is whatever Python launched the hook process — if Claude Code
+    was started with the SMT venv active, that's already the right interpreter
+    with all dependencies. No path hunting needed.
+
+    Falls back to the project-local smt_cli.py if found, or 'smt' in PATH.
+    """
+    if _SMT_CLI.exists():
+        # Same project or venv — use the hook's own Python interpreter
+        cmd = [sys.executable, str(_SMT_CLI)] + list(args)
     else:
-        # Benchmark project: look for smt.bat / smt shell script next to the hook
-        for candidate in (_PROJECT_ROOT / "smt.bat", _PROJECT_ROOT / "smt"):
-            if candidate.exists():
-                cmd = [str(candidate)] + list(args)
-                break
-        else:
-            found = shutil.which("smt")
-            cmd = [found] + list(args) if found else None
-        if cmd is None:
+        # Deployed to another project (e.g. benchmark) — find smt in PATH
+        import shutil
+        found = shutil.which("smt") or shutil.which("smt.bat")
+        if not found:
             return ""
+        cmd = [found] + list(args)
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                            cwd=str(_PROJECT_ROOT))
