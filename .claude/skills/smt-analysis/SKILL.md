@@ -40,7 +40,7 @@ The working directory is already the project root.
 
 **If orient did NOT find the symbol** → run:
 ```bash
-smt context X --depth 2 --compact --compress
+smt context X --depth 5 --compact --compress
 ```
 This gives you: location, what it calls, and who calls it — in one command. Do NOT substitute grep + view + scope loops for this.
 
@@ -53,7 +53,7 @@ If X is a concept (not a symbol), use `smt grep <concept>` to identify the key s
 | Situation | Run |
 |---|---|
 | orient injected context for your symbol | Skip — go straight to reasoning |
-| symbol not found by orient | `smt context X --depth 2 --compact --compress` |
+| symbol not found by orient | `smt context X --depth 5 --compact --compress` |
 | "what breaks / what changes if I change X" | `smt impact X --depth 3` |
 | "who calls X" | `smt context X --callers` |
 | concept only, no symbol | `smt grep <concept>` → get symbols → then `smt context` or `smt impact` |

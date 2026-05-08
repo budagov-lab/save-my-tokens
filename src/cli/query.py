@@ -808,7 +808,7 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
         print("## Graph context (auto-extracted from task)\n")
 
         found_any = False
-        top_symbols: list = []  # symbol names for context injection — max 3 Function/Class
+        top_symbols: list = []  # (name, ltype) for context injection — max 3 Function/Class
 
         for term in terms:
             with client.driver.session() as session:
@@ -841,40 +841,49 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
                     display = r.get('file') or '?'
                 print(f"  {r['name']}  [{r['ltype']}]  {display}:{r.get('line', '?')}")
                 # Collect exact-match Function/Class hits for context injection
+                names_seen = [n for n, _ in top_symbols]
                 if (with_source
                         and len(top_symbols) < 3
                         and r['ltype'] in ('Function', 'Class')
-                        and r['name'] not in top_symbols
+                        and r['name'] not in names_seen
                         and r['name'].lower() == term.lower()):
-                    top_symbols.append(r['name'])
+                    top_symbols.append((r['name'], r['ltype']))
             print()
 
         if not found_any:
             print("(no graph matches for task terms — use smt grep manually)\n")
 
-        # Context injection: run smt context on top symbols so the agent has
-        # callers + callees pre-loaded and can go straight to reasoning on Turn 1.
-        # Skip symbols where the graph returns no edges (stale graph or unindexed call chains).
+        # Context injection: run smt context (depth 5) on top symbols.
+        # For Class symbols with edges=0 (e.g. exception classes that get raised,
+        # not called), fall back to smt impact which does reverse traversal to
+        # find who raises/uses them.
         if with_source and top_symbols:
             import io
             from contextlib import redirect_stdout
             injected = []
-            for sym in top_symbols:
+            for sym, ltype in top_symbols:
                 buf = io.StringIO()
                 with redirect_stdout(buf):
-                    cmd_context(sym, depth=2, compact=True, compress=True)
+                    cmd_context(sym, depth=5, compact=True, compress=True)
                 out = buf.getvalue()
                 if "edges=0" not in out:
-                    injected.append((sym, out))
+                    injected.append((f"smt context {sym} --depth 5 --compact --compress", out))
+                elif ltype == "Class":
+                    buf2 = io.StringIO()
+                    with redirect_stdout(buf2):
+                        cmd_impact(sym, max_depth=5, compress=True, compact=True, brief=True)
+                    out2 = buf2.getvalue()
+                    if out2.strip():
+                        injected.append((f"smt impact {sym} --depth 5 --compact --compress", out2))
             if injected:
                 print("## Auto-context (callers + callees for task symbols)\n")
-                for sym, out in injected:
-                    print(f"```  smt context {sym} --depth 2 --compact --compress")
+                for label, out in injected:
+                    print(f"```  {label}")
                     print(out, end="")
                     print("```\n")
             else:
                 print("## Auto-context\n")
-                print("(graph edges empty for these symbols — graph may be stale; use smt grep + smt view)\n")
+                print("(graph edges empty — graph may be stale; use smt grep + smt view)\n")
 
         return 0
     except Exception as e:
