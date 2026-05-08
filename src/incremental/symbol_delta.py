@@ -1,7 +1,7 @@
 """Symbol delta representation for incremental updates."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from src.parsers.symbol import Symbol
@@ -15,7 +15,7 @@ class SymbolDelta:
     added: List[Symbol] = field(default_factory=list)  # New symbols
     deleted: List[str] = field(default_factory=list)  # Symbol names removed
     modified: List[Symbol] = field(default_factory=list)  # Changed definitions
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __repr__(self) -> str:
         """String representation for logging."""
