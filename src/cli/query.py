@@ -853,38 +853,63 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
         if not found_any:
             print("(no graph matches for task terms — use smt grep manually)\n")
 
-        # Context injection: run smt context (depth 5) on top symbols.
-        # For Class symbols with edges=0 (e.g. exception classes that get raised,
-        # not called), fall back to smt impact which does reverse traversal to
-        # find who raises/uses them.
+        # Three-step find-all-references → impact pipeline (subprocess to avoid
+        # driver lifecycle conflicts with the already-open orient session):
+        #   1. smt context X     — direct neighbours (callees + callers)
+        #   2. smt impact X      — reverse traversal (who calls/raises X)
+        #   3. smt grep X → impact each user  — find-all-references then impact
         if with_source and top_symbols:
-            import io
-            from contextlib import redirect_stdout
+
+            def _smt(*args: str) -> str:
+                import subprocess, sys, shutil
+                from pathlib import Path
+                cli = Path(__file__).parent.parent / "smt_cli.py"
+                cmd = [sys.executable, str(cli)] + list(args) if cli.exists() \
+                    else ([shutil.which("smt")] or ["smt"]) + list(args)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=15,
+                                   cwd=str(project_path))
+                return (r.stdout or "").strip()
+
+            def _grep_users(sym: str) -> list:
+                raw = _smt("grep", sym)
+                users = []
+                for line in raw.splitlines():
+                    m = re.match(r'^\s+(\S+)\s+\[(?:Function|Class)\]', line)
+                    if m:
+                        name = m.group(1)
+                        if name.lower() != sym.lower() and name not in users:
+                            users.append(name)
+                return users[:3]
+
             injected = []
             for sym, ltype in top_symbols:
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    cmd_context(sym, depth=5, compact=True, compress=True)
-                out = buf.getvalue()
-                if "edges=0" not in out:
+                # Step 1: context
+                out = _smt("context", sym, "--depth", "5", "--compact", "--compress")
+                if out and "edges=0" not in out:
                     injected.append((f"smt context {sym} --depth 5 --compact --compress", out))
-                else:
-                    # Context found no edges — try impact (reverse traversal)
-                    buf2 = io.StringIO()
-                    with redirect_stdout(buf2):
-                        cmd_impact(sym, max_depth=5, compress=True, compact=True, brief=True)
-                    out2 = buf2.getvalue()
-                    if out2.strip() and "0 callers" not in out2:
-                        injected.append((f"smt impact {sym} --depth 5 --compact --compress", out2))
+                    continue
+
+                # Step 2: impact
+                out2 = _smt("impact", sym, "--depth", "5", "--compact", "--compress")
+                if out2 and "0 callers" not in out2:
+                    injected.append((f"smt impact {sym} --depth 5 --compact --compress", out2))
+                    continue
+
+                # Step 3: grep → find users → impact each user
+                for user in _grep_users(sym):
+                    out3 = _smt("impact", user, "--depth", "5", "--compact", "--compress")
+                    if out3 and "0 callers" not in out3:
+                        injected.append((f"smt impact {user} --depth 5  # users of {sym}", out3))
+
             if injected:
                 print("## Auto-context (callers + callees for task symbols)\n")
                 for label, out in injected:
                     print(f"```  {label}")
-                    print(out, end="")
+                    print(out)
                     print("```\n")
             else:
                 print("## Auto-context\n")
-                print("(graph edges empty — graph may be stale; use smt grep + smt view)\n")
+                print("(no relationship edges found — use smt grep + smt view)\n")
 
         return 0
     except Exception as e:
