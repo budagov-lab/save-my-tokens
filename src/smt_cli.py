@@ -250,7 +250,7 @@ graph analysis:
     # orient (best-effort pre-querying for the smt-analysis skill)
     p_orient = sub.add_parser('orient', help='Extract symbols from task text and grep the graph (used by skill pre-flight)')
     p_orient.add_argument('task_text', nargs='+', help='Task description words (e.g. $ARGUMENTS from SKILL.md)')
-    p_orient.add_argument('--source', action='store_true', help='Run smt context --depth 2 on top matched symbols (callers + callees pre-loaded for agent Turn 1)')
+    p_orient.add_argument('--source', action='store_true', help='Run smt context --depth 5 on top matched symbols (callers + callees pre-loaded for agent Turn 1)')
 
     # sync
     p_sync = sub.add_parser('sync', help='Sync graph with git commits (incremental update)')
@@ -366,7 +366,7 @@ graph analysis:
         return cmd_build(check=args.check, clear=args.clear, target_dir=args.dir,
                          embeddings=getattr(args, 'embeddings', False))
     elif args.command == 'context':
-        depth = args.depth if args.depth is not None else _get_default_depth(2)
+        depth = args.depth if args.depth is not None else _get_default_depth(5)
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.context(args.symbol, depth=depth, compress=args.compress)
@@ -389,7 +389,7 @@ graph analysis:
                         compact=getattr(args, 'compact', False),
                         brief=getattr(args, 'brief', False))
     elif args.command == 'impact':
-        depth = args.depth if args.depth is not None else _get_default_depth(3)
+        depth = args.depth if args.depth is not None else _get_default_depth(5)
         if getattr(args, 'json', False):
             engine = _get_engine()
             result = engine.impact(args.symbol, depth=depth)
