@@ -19,7 +19,9 @@ argument-hint: [symbol-or-question]
 | Status | Action |
 |---|---|
 | `[✓] fresh` | Proceed |
-| `[!] N behind` | `smt sync` if N ≤ 10; otherwise proceed (line numbers may drift slightly) |
+| `[!] N behind` N ≤ 10 | `smt sync` then proceed |
+| `[!] N behind` N > 10 | Proceed — line numbers may drift, but edges are intact |
+| `[!] N behind` N > 100 | CALL edges are unreliable — skip context/impact, use `smt grep` + `smt view` only |
 | 0 nodes | Stop — tell user: `smt build` |
 | unreachable | Stop — tell user: `smt start` |
 

@@ -854,12 +854,27 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
 
         # Context injection: run smt context on top symbols so the agent has
         # callers + callees pre-loaded and can go straight to reasoning on Turn 1.
+        # Skip symbols where the graph returns no edges (stale graph or unindexed call chains).
         if with_source and top_symbols:
-            print("## Auto-context (callers + callees for task symbols)\n")
+            import io
+            from contextlib import redirect_stdout
+            injected = []
             for sym in top_symbols:
-                print(f"```  smt context {sym} --depth 2 --compact --compress")
-                cmd_context(sym, depth=2, compact=True, compress=True)
-                print("```\n")
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    cmd_context(sym, depth=2, compact=True, compress=True)
+                out = buf.getvalue()
+                if "edges=0" not in out:
+                    injected.append((sym, out))
+            if injected:
+                print("## Auto-context (callers + callees for task symbols)\n")
+                for sym, out in injected:
+                    print(f"```  smt context {sym} --depth 2 --compact --compress")
+                    print(out, end="")
+                    print("```\n")
+            else:
+                print("## Auto-context\n")
+                print("(graph edges empty for these symbols — graph may be stale; use smt grep + smt view)\n")
 
         return 0
     except Exception as e:
