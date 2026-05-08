@@ -145,15 +145,24 @@ def main() -> None:
         sys.exit(0)
 
     # ------------------------------------------------------------------
-    # UserPromptSubmit — capture original user question before agent paraphrases it
+    # UserPromptSubmit — capture original user question before agent paraphrases it.
+    # Only writes on the FIRST message of each session; follow-up messages in the
+    # same session are ignored so the original task stays as the ground truth.
     # ------------------------------------------------------------------
     if event.get("hook_event_name") == "UserPromptSubmit":
         prompt = event.get("prompt", "").strip()
+        session_id = event.get("session_id", "")
         if prompt:
             task_file = _PROJECT_ROOT / ".smt" / "task.txt"
+            session_file = _PROJECT_ROOT / ".smt" / "task_session.txt"
             try:
                 task_file.parent.mkdir(exist_ok=True)
-                task_file.write_text(prompt, encoding="utf-8")
+                current_session = session_file.read_text(encoding="utf-8").strip() if session_file.exists() else ""
+                if current_session != session_id:
+                    # New session — write task and record session id
+                    task_file.write_text(prompt, encoding="utf-8")
+                    session_file.write_text(session_id, encoding="utf-8")
+                # Same session — keep the original first message, ignore this one
             except Exception:
                 pass
         sys.exit(0)
