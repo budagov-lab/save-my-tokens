@@ -21,7 +21,7 @@ argument-hint: [symbol-or-question]
 | `[✓] fresh` | Proceed |
 | `[!] N behind` N ≤ 10 | `smt sync` then proceed |
 | `[!] N behind` N > 10 | Proceed — line numbers may drift, but edges are intact |
-| `[!] N behind` N > 100 | CALL edges are unreliable — skip context/impact, use `smt grep` + `smt view` only |
+| `[!] N behind` N > 100 | CALL edges may be incomplete — `smt grep` and `smt view` are still fully reliable; treat any empty context/impact result as "not found" and use `smt grep` to locate usages instead |
 | 0 nodes | Stop — tell user: `smt build` |
 | unreachable | Stop — tell user: `smt start` |
 

@@ -874,7 +874,7 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
                     with redirect_stdout(buf2):
                         cmd_impact(sym, max_depth=5, compress=True, compact=True, brief=True)
                     out2 = buf2.getvalue()
-                    if out2.strip():
+                    if out2.strip() and "0 callers" not in out2:
                         injected.append((f"smt impact {sym} --depth 5 --compact --compress", out2))
             if injected:
                 print("## Auto-context (callers + callees for task symbols)\n")
