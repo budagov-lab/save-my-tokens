@@ -175,6 +175,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     if "tool_response" in event:
         if tool_name == "Skill" and tool_input.get("skill") == "smt-analysis":
+            # Clear task files so the next user message is treated as a new task
+            for fname in ("task.txt", "task_session.txt"):
+                try:
+                    (_PROJECT_ROOT / ".smt" / fname).unlink(missing_ok=True)
+                except Exception:
+                    pass
             _inject(
                 "─── SMT reminder ───\n"
                 "You now have graph context. For source lines use smt view <symbol> — "
