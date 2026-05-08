@@ -808,7 +808,7 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
         print("## Graph context (auto-extracted from task)\n")
 
         found_any = False
-        top_symbols: list = []  # (name, ltype) for context injection — max 3 Function/Class
+        top_symbols: list = []  # (name, ltype) pairs for context injection — max 3 Function/Class
 
         for term in terms:
             with client.driver.session() as session:
@@ -868,7 +868,8 @@ def cmd_orient(task_words: list, with_source: bool = False) -> int:
                 out = buf.getvalue()
                 if "edges=0" not in out:
                     injected.append((f"smt context {sym} --depth 5 --compact --compress", out))
-                elif ltype == "Class":
+                else:
+                    # Context found no edges — try impact (reverse traversal)
                     buf2 = io.StringIO()
                     with redirect_stdout(buf2):
                         cmd_impact(sym, max_depth=5, compress=True, compact=True, brief=True)
