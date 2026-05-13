@@ -34,6 +34,11 @@ try:
 except ImportError:
     JavaParser = None  # type: ignore[name-defined]
 
+try:
+    from src.parsers.csharp_parser import CSharpParser
+except ImportError:
+    CSharpParser = None  # type: ignore[name-defined]
+
 
 class GraphBuilder:
     """Orchestrates the full pipeline: Parse -> Index -> Create Graph Nodes -> Create Graph Edges."""
@@ -55,6 +60,7 @@ class GraphBuilder:
         self.go_parser = GoParser(str(self.base_path)) if GoParser else None  # type: ignore[operator]
         self.rust_parser = RustParser(str(self.base_path)) if RustParser else None  # type: ignore[operator]
         self.java_parser = JavaParser(str(self.base_path)) if JavaParser else None  # type: ignore[operator]
+        self.csharp_parser = CSharpParser(str(self.base_path)) if CSharpParser else None  # type: ignore[operator]
         self.symbol_index: SymbolIndex = SymbolIndex()
         self.call_analyzer = CallAnalyzer(self.symbol_index)
         self.nodes: List[Node] = []
@@ -98,6 +104,7 @@ class GraphBuilder:
         "node_modules", ".next", ".venv", "venv", "__pycache__",
         "generated", "dist", "build", "target", ".git", ".tox", "coverage",
         "htmlcov", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+        "bin", "obj",  # C# build output
     }
 
     @classmethod
@@ -139,6 +146,11 @@ class GraphBuilder:
                 if not self._is_ignored(file_path):
                     all_files.append((file_path, "java"))
 
+        if self.csharp_parser:
+            for file_path in self.base_path.rglob("*.cs"):
+                if not self._is_ignored(file_path):
+                    all_files.append((file_path, "csharp"))
+
         # Parse with progress bar
         with Progress(
             SpinnerColumn(),
@@ -159,8 +171,10 @@ class GraphBuilder:
                         symbols = self.go_parser.parse_file(str(file_path))
                     elif file_type == "rust":
                         symbols = self.rust_parser.parse_file(str(file_path))
-                    else:  # java
+                    elif file_type == "java":
                         symbols = self.java_parser.parse_file(str(file_path))
+                    else:  # csharp
+                        symbols = self.csharp_parser.parse_file(str(file_path))
 
                     self.symbol_index.add_all(symbols)
                     logger.debug(f"Parsed {file_path}: {len(symbols)} symbols")
@@ -342,6 +356,11 @@ class GraphBuilder:
                         body_type = "block"
                         call_type = "method_invocation"
                         call_name_field = "name"
+                    elif ext == ".cs":
+                        parser_obj = self.csharp_parser
+                        body_type = "block"
+                        call_type = "invocation_expression"
+                        call_name_field = "function"
                     else:
                         continue
 
