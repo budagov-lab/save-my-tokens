@@ -10,7 +10,7 @@ argument-hint: [symbol-or-question]
 
 ## Pre-flight
 
-!`smt status 2>&1 | head -5`
+!`smt status 2>&1`
 
 ## Auto-context (callers + callees pre-loaded)
 
