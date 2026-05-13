@@ -7,8 +7,9 @@ PreToolUse responsibilities:
 2. advisor               → inject SMT skill via additionalContext
 3. Read (full-file, src) → allow small files (≤ LINE_LIMIT); redirect large files with
                            smt list + smt view bodies so agent gets source inline
-4. Grep                  → deny and suggest smt grep
-5. Bash (Windows tools)  → intercept findstr/Get-Content/Select-String, run smt grep
+4. Grep                  → denied via settings.json permissions (not handled here)
+5. Bash (cd + smt)       → strip leading `cd [...] &&` and rewrite to just the smt command
+6. Bash (Windows tools)  → intercept findstr/Get-Content/Select-String, run smt grep
 
 PostToolUse responsibilities:
 6. Skill (smt-analysis)  → inject follow-up reminder: use smt view, not Read
@@ -97,12 +98,28 @@ def load_skill() -> str:
         return ""
 
 
+_CD_SMT_RE = re.compile(
+    r'^(?:cd\s+(?:/d\s+)?(?:"[^"]*"|\S+)\s*&&\s*)+(smt\s+.+)$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def _deny(reason: str) -> None:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason,
+        }
+    }))
+
+
+def _allow_rewrite(new_cmd: str) -> None:
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {"command": new_cmd},
         }
     }))
 
@@ -115,6 +132,53 @@ def _inject(context: str) -> None:
             "additionalContext": context,
         }
     }))
+
+
+_STRIP_CD = re.compile(
+    r'^(?:cd\s+(?:/d\s+)?(?:"[^"]*"|\S+)\s*&&\s*)+', re.IGNORECASE
+)
+
+
+def _extract_grep_pattern(cmd: str) -> str:
+    """Extract pattern from a standalone grep command (not a pipe filter).
+    Returns '' if this isn't an interceptable grep."""
+    stripped = _STRIP_CD.sub('', cmd.strip())
+    # Skip pipe-filter form: "something | grep pattern" — that's output filtering, leave it alone
+    if re.search(r'\S\s*\|\s*grep\b', stripped):
+        return ""
+    if not re.match(r'grep\b', stripped, re.IGNORECASE):
+        return ""
+    # grep [-flags...] "pattern" [paths...]
+    m = re.search(r'grep(?:\s+-\S+)*\s+"((?:[^"\\]|\\.)*)"', stripped)
+    if m:
+        return m.group(1)
+    m = re.search(r"grep(?:\s+-\S+)*\s+'((?:[^'\\]|\\.)*)'", stripped)
+    if m:
+        return m.group(1)
+    # unquoted pattern
+    m = re.search(r'grep(?:\s+-\S+)*\s+(\S+)', stripped)
+    if m and not m.group(1).startswith('-'):
+        return m.group(1)
+    return ""
+
+
+def _extract_cat_file(cmd: str) -> str:
+    """Extract source file path from cat/head/tail/less/more command.
+    Returns '' if not applicable."""
+    stripped = _STRIP_CD.sub('', cmd.strip())
+    if not re.match(r'(?:cat|head|tail|less|more)\b', stripped, re.IGNORECASE):
+        return ""
+    # cat/head [-n N] [-flags] file  — stop at pipe/redirect
+    m = re.match(
+        r'(?:cat|head|tail|less|more)\s+(?:-\S+\s+)*(?:-n\s*\d+\s+)?(?:-\S+\s+)*([^\s|&;><"\']+|"[^"]+"|\'[^\']+\')',
+        stripped, re.IGNORECASE,
+    )
+    if not m:
+        return ""
+    fp = m.group(1).strip("\"'")
+    if Path(fp).suffix in _SOURCE_EXTS:
+        return fp
+    return ""
 
 
 def _extract_win_pattern(cmd: str) -> str:
@@ -256,19 +320,54 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------
-    # Grep — redirect to smt grep
-    # ------------------------------------------------------------------
-    if tool_name == "Grep":
-        pattern = tool_input.get("pattern", "")
-        short = pattern[:60].replace('"', '\\"')
-        _deny(f'Grep blocked. Run: smt grep "{short}"')
-        return
-
-    # ------------------------------------------------------------------
     # Bash — intercept Windows-only search/read tools
     # ------------------------------------------------------------------
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
+
+        # Strip leading `cd [...] &&` chains when the real command is smt.
+        # The agent often prefixes smt calls with a cd to the benchmark repo,
+        # which either fails (path missing) or puts smt in the wrong cwd.
+        # Rewrite silently so the smt call lands in the project root.
+        m = _CD_SMT_RE.match(cmd.strip())
+        if m:
+            _allow_rewrite(m.group(1).strip())
+            return
+
+        # Intercept plain grep → smt grep
+        pattern = _extract_grep_pattern(cmd)
+        if pattern:
+            grep_out = _run_smt("grep", pattern)
+            if grep_out:
+                _deny(
+                    f'[smt grep "{pattern}"]\n\n{grep_out}\n\n'
+                    f'Next: smt view <symbol> to see source body.'
+                )
+                return
+            # No results — let grep run naturally (it'll just return empty)
+            sys.exit(0)
+
+        # Intercept cat/head/tail on source files → smt scope + top symbol bodies
+        file_path = _extract_cat_file(cmd)
+        if file_path:
+            parts = []
+            scope_out = _run_smt("scope", file_path)
+            if scope_out:
+                parts.append(scope_out)
+            for sym in _top_symbols_from_file(file_path, max_syms=2):
+                view_out = _run_smt("view", sym)
+                if view_out:
+                    parts.append(f"--- smt view {sym} ---\n{view_out}")
+            if parts:
+                _deny(
+                    f'[smt redirect: {Path(file_path).name}]\n\n'
+                    + "\n\n".join(parts)
+                    + "\n\nUse smt view <symbol> for more symbols in this file."
+                )
+                return
+            # smt has nothing — let cat/head run
+            sys.exit(0)
+
         is_win, tool_matched = _win_tool_invoked(cmd)
         if not is_win:
             sys.exit(0)  # normal bash command — allow

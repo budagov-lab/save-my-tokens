@@ -1,3 +1,4 @@
+
 """One-shot: enumerate every failure pattern across all 12 sessions."""
 import json, glob, re
 from pathlib import Path

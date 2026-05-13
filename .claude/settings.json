@@ -30,15 +30,6 @@
         ]
       },
       {
-        "matcher": "Grep",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python .claude/hooks/smt_agent_hook.py"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -82,6 +73,7 @@
       "Bash"
     ],
     "deny": [
+      "Grep",
       "Bash(rm -rf:*)",
       "Bash(git reset --hard:*)",
       "Bash(git push --force:*)"
