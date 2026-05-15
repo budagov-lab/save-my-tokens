@@ -86,7 +86,8 @@
   "env": {
     "PYTHONPATH": "src",
     "NEO4J_LOG_LEVEL": "info",
-    "SMT_AGENT": "1"
+    "SMT_AGENT": "1",
+    "PYTHONUTF8": "1"
   },
   "respectGitignore": true
 }

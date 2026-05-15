@@ -69,8 +69,8 @@ def _run_smt(*args: str, timeout: int = 12) -> str:
             return ""
         cmd = [found] + list(args)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           cwd=str(_PROJECT_ROOT))
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                           timeout=timeout, cwd=str(_PROJECT_ROOT))
         return (r.stdout or "").strip()
     except Exception:
         return ""
@@ -222,6 +222,21 @@ def main() -> None:
                 task_file.write_text(prompt, encoding="utf-8")
             except Exception:
                 pass
+            words = prompt.split()[:12]
+            orient_out = _run_smt("orient", *words, timeout=6)
+            if orient_out and "## Graph context" in orient_out:
+                print(json.dumps({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": (
+                            orient_out
+                            + "\n\n─── Use this context ───\n"
+                            "Symbols above are already located (file:line). "
+                            "Use smt view <symbol> for source. "
+                            "Do NOT run smt grep to re-find them."
+                        ),
+                    }
+                }))
         sys.exit(0)
 
     tool_name = event.get("tool_name", "")
@@ -238,11 +253,12 @@ def main() -> None:
             except Exception:
                 pass
             _inject(
-                "─── SMT reminder ───\n"
-                "You now have graph context. For source lines use smt view <symbol> — "
-                "not the Read tool.\n"
-                "smt view returns exact source with line numbers and needs no offset.\n"
-                "────────────────────"
+                "─── SMT context injected ───\n"
+                "The orient output above shows exact file:line for each symbol.\n"
+                "• Use smt view <symbol> for source — NOT the Read tool\n"
+                "• Do NOT run smt grep for a symbol already shown in orient output\n"
+                "  (smt grep is only for symbols orient did NOT find)\n"
+                "────────────────────────────"
             )
         return
 
@@ -332,6 +348,29 @@ def main() -> None:
         m = _CD_SMT_RE.match(cmd.strip())
         if m:
             _allow_rewrite(m.group(1).strip())
+            return
+
+        # Intercept smt grep/context/definition called with a filename instead of symbol.
+        # e.g. smt grep exceptions.py or smt context graph_builder.py
+        # Correct command is smt scope <file>.
+        _smt_file_arg = re.match(
+            r"smt\s+(?:grep|context|definition)\s+(\S+\.(?:py|ts|tsx|js|jsx|go|rs|java|cs))",
+            cmd.strip(), re.IGNORECASE
+        )
+        if _smt_file_arg:
+            fp = _smt_file_arg.group(1)
+            scope_out = _run_smt("scope", fp)
+            if scope_out:
+                _deny(
+                    "smt grep/context/definition takes a symbol name, not a file path.\n"
+                    f"Running smt scope {fp} instead:\n\n{scope_out}\n\n"
+                    "Use smt view <symbol> to see source."
+                )
+                return
+            _deny(
+                "smt grep/context/definition takes a symbol name, not a file path.\n"
+                f"For a file view, use: smt scope {fp}"
+            )
             return
 
         # Intercept plain grep → smt grep
